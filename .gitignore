@@ -1,0 +1,38 @@
+# Build output
+[Bb]in/
+[Oo]bj/
+[Bb]uild/
+out/
+x64/
+ARM64/
+[Dd]ebug/
+[Rr]elease/
+
+# Visual Studio / MSVC
+.vs/
+*.user
+*.suo
+*.pdb
+*.ilk
+*.obj
+*.iobj
+*.ipdb
+*.idb
+*.tlog
+*.lastbuildstate
+*.aps
+*.VC.db
+*.VC.opendb
+ipch/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeUserPresets.json
+
+# NuGet / C++/WinRT generated
+packages/
+Generated Files/
+
+# Logs
+*.log
