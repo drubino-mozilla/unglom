@@ -34,7 +34,7 @@ cl %CFLAGS% /LD /Fo"%OUT%\obj\tap\\" /Fd"%OUT%\obj\tap\\" /Fe"%OUT%\UnglomTap.dl
 
 echo.
 echo === Unglom.exe ===
-if exist "%OUT%\Unglom.exe" "%OUT%\Unglom.exe" --stop
+if exist "%OUT%\Unglom.exe" "%OUT%\Unglom.exe" --stop-this-copy
 rc /nologo /i "%ROOT%res" /i "%ROOT%src\loader" /fo "%OUT%\obj\loader\Unglom.res" "%ROOT%src\loader\Unglom.rc" || goto :fail
 cl %CFLAGS% /Fo"%OUT%\obj\loader\\" /Fd"%OUT%\obj\loader\\" /Fe"%OUT%\Unglom.exe" ^
   "%ROOT%src\loader\Unglom.cpp" "%ROOT%src\common\Log.cpp" "%OUT%\obj\loader\Unglom.res" ^

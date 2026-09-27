@@ -5,6 +5,7 @@
 // Command line:
 //   Unglom.exe [--mode run|dump] [--dll <path>]   start (replacing any running copy)
 //   Unglom.exe --stop                              stop the running copy
+//   Unglom.exe --stop-this-copy                    stop it only if it is this same exe file
 
 #include <windows.h>
 #include <shellapi.h>
@@ -266,18 +267,28 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
   return DefWindowProcW(hwnd, message, wparam, lparam);
 }
 
-// Closes a running copy (if any) and waits for it to exit.
-void StopRunningInstance() {
+// Closes a running copy (if any) and waits for it to exit. With
+// onlyThisCopy, a copy running from a different exe file is left alone.
+void StopRunningInstance(bool onlyThisCopy) {
   HWND other = FindWindowW(kWindowClass, nullptr);
   if (!other) return;
   DWORD pid = 0;
   GetWindowThreadProcessId(other, &pid);
-  HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, pid);
-  PostMessageW(other, WM_CLOSE, 0, 0);
-  if (process) {
-    WaitForSingleObject(process, 5000);
-    CloseHandle(process);
+  HANDLE process = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process) return;
+  if (onlyThisCopy) {
+    wchar_t path[MAX_PATH * 2];
+    DWORD size = ARRAYSIZE(path);
+    bool same = QueryFullProcessImageNameW(process, 0, path, &size) &&
+                CompareStringOrdinal(path, -1, ExePath().c_str(), -1, TRUE) == CSTR_EQUAL;
+    if (!same) {
+      CloseHandle(process);
+      return;
+    }
   }
+  PostMessageW(other, WM_CLOSE, 0, 0);
+  WaitForSingleObject(process, 5000);
+  CloseHandle(process);
 }
 
 }  // namespace
@@ -286,18 +297,20 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   LogInit(L"loader.log", L"loader");
 
   bool stopOnly = false;
+  bool onlyThisCopy = false;
   g.sourceDll = ExeDir() + L"\\UnglomTap.dll";
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
   for (int i = 1; i < argc; ++i) {
     std::wstring arg = argv[i];
     if (arg == L"--stop") stopOnly = true;
+    if (arg == L"--stop-this-copy") stopOnly = onlyThisCopy = true;
     if (arg == L"--mode" && i + 1 < argc) g.mode = argv[++i];
     if (arg == L"--dll" && i + 1 < argc) g.sourceDll = argv[++i];
   }
   LocalFree(argv);
 
-  StopRunningInstance();
+  StopRunningInstance(onlyThisCopy);
   if (stopOnly) return 0;
   Log(L"Starting (mode=%ls, dll=%ls)", g.mode.c_str(), g.sourceDll.c_str());
 

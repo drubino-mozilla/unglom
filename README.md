@@ -26,17 +26,23 @@ window, and showing window titles. Unglom (named after Windows' own
 
 1. In Windows Settings > Personalization > Taskbar > Taskbar behaviors, set
    "Combine taskbar buttons and hide labels" to **Never**.
-2. Double-click `build.cmd`. The first run downloads Microsoft's C++ compiler
-   and Windows SDK into `%LOCALAPPDATA%\unglom-toolchain` (no admin needed,
-   about 500 MB; this accepts the Visual Studio Build Tools license).
-3. Double-click `out\Unglom.exe`. It lives in the notification area (the
-   system tray). Its menu has Pause/Resume, Start with Windows, the log
-   folder, and Exit. Exiting or pausing puts the taskbar back exactly as it
-   was.
+2. Double-click `install.cmd`. It builds Unglom, copies it to
+   `%LOCALAPPDATA%\Unglom\app`, makes it start with Windows, adds it to the
+   Start menu, and starts it. The first build downloads Microsoft's C++
+   compiler and Windows SDK into `%LOCALAPPDATA%\unglom-toolchain` (no admin
+   needed, about 500 MB; this accepts the Visual Studio Build Tools license).
+3. Unglom lives in the notification area (the system tray). Its menu has
+   Pause/Resume, Start with Windows, the log folder, and Exit. Exiting or
+   pausing puts the taskbar back exactly as it was.
 
-Logs are in `%LOCALAPPDATA%\Unglom`.
+Run `install.cmd` again to update the installed copy; `uninstall.cmd` removes
+it. Logs are in `%LOCALAPPDATA%\Unglom`.
 
 ## Development
+
+`build.cmd` builds into `out\` without touching the installed copy. Running
+`out\Unglom.exe` replaces whichever copy is running (only one runs at a time);
+start the installed one again from the Start menu when done.
 
 - `out\TitleDiffTests.exe` runs the title logic unit tests (`build.cmd` runs
   them automatically).
