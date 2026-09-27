@@ -7,7 +7,6 @@
 //   Unglom.exe --stop                              stop the running copy
 
 #include <windows.h>
-#include <commctrl.h>
 #include <shellapi.h>
 
 #include <string>
@@ -141,7 +140,9 @@ void UpdateTrayIcon(DWORD message) {
   g.icon.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE;
   g.icon.uCallbackMessage = WM_TRAY;
   if (!g.icon.hIcon) {
-    LoadIconMetric(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(kIconId), LIM_SMALL, &g.icon.hIcon);
+    int size = GetSystemMetricsForDpi(SM_CXSMICON, GetDpiForWindow(g.icon.hWnd));
+    g.icon.hIcon = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(kIconId),
+                                                 IMAGE_ICON, size, size, 0));
   }
   lstrcpynW(g.icon.szTip, g.enabled ? L"Unglom is on" : L"Unglom is paused",
             ARRAYSIZE(g.icon.szTip));
