@@ -35,9 +35,11 @@ cl %CFLAGS% /LD /Fo"%OUT%\obj\tap\\" /Fd"%OUT%\obj\tap\\" /Fe"%OUT%\UnglomTap.dl
 echo.
 echo === Unglom.exe ===
 if exist "%OUT%\Unglom.exe" "%OUT%\Unglom.exe" --stop
+rc /nologo /i "%ROOT%res" /fo "%OUT%\obj\loader\Unglom.res" "%ROOT%src\loader\Unglom.rc" || goto :fail
 cl %CFLAGS% /Fo"%OUT%\obj\loader\\" /Fd"%OUT%\obj\loader\\" /Fe"%OUT%\Unglom.exe" ^
-  "%ROOT%src\loader\Unglom.cpp" "%ROOT%src\common\Log.cpp" ^
-  /link /DEBUG /SUBSYSTEM:WINDOWS user32.lib shell32.lib advapi32.lib ole32.lib || goto :fail
+  "%ROOT%src\loader\Unglom.cpp" "%ROOT%src\common\Log.cpp" "%OUT%\obj\loader\Unglom.res" ^
+  /link /DEBUG /SUBSYSTEM:WINDOWS user32.lib shell32.lib advapi32.lib ole32.lib comctl32.lib ^
+  || goto :fail
 
 echo.
 echo === Running unit tests ===

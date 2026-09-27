@@ -7,6 +7,7 @@
 //   Unglom.exe --stop                              stop the running copy
 
 #include <windows.h>
+#include <commctrl.h>
 #include <shellapi.h>
 
 #include <string>
@@ -21,6 +22,7 @@ namespace {
 constexpr CLSID CLSID_UnglomTap = {
     0x5a5848b4, 0xa64b, 0x4360, {0x97, 0x8b, 0xa4, 0x02, 0xc2, 0x90, 0x27, 0x14}};
 
+constexpr int kIconId = 1;  // Unglom.rc
 constexpr wchar_t kWindowClass[] = L"UnglomLoaderWindow";
 constexpr wchar_t kRunKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 constexpr wchar_t kRunValue[] = L"Unglom";
@@ -138,7 +140,9 @@ bool Inject() {
 void UpdateTrayIcon(DWORD message) {
   g.icon.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE;
   g.icon.uCallbackMessage = WM_TRAY;
-  g.icon.hIcon = LoadIconW(nullptr, IDI_APPLICATION);
+  if (!g.icon.hIcon) {
+    LoadIconMetric(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(kIconId), LIM_SMALL, &g.icon.hIcon);
+  }
   lstrcpynW(g.icon.szTip, g.enabled ? L"Unglom is on" : L"Unglom is paused",
             ARRAYSIZE(g.icon.szTip));
   Shell_NotifyIconW(message, &g.icon);
@@ -299,6 +303,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   WNDCLASSW wc = {};
   wc.lpfnWndProc = WndProc;
   wc.hInstance = instance;
+  wc.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(kIconId));
   wc.lpszClassName = kWindowClass;
   RegisterClassW(&wc);
   HWND hwnd = CreateWindowW(kWindowClass, L"Unglom", 0, 0, 0, 0, 0, nullptr, nullptr, instance,
