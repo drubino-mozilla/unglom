@@ -12,6 +12,10 @@ window, and showing window titles. Unglom (named after Windows' own
   `Inbox - alice@work.com - Outlook` and `Inbox - bob@home.com - Outlook`
   become `alice@work.com` and `bob@home.com`.
 
+It can also put pinned apps on other monitors' taskbars. Windows either shows
+every pin (and every window) on every taskbar, or pins on the main taskbar
+only. Unglom lets you pick, per pin, which monitors' taskbars it appears on.
+
 ## How it works
 
 - `Unglom.exe` is a small tray app that loads `UnglomTap.dll` into the taskbar
@@ -19,6 +23,12 @@ window, and showing window titles. Unglom (named after Windows' own
   it whenever Explorer restarts.
 - `UnglomTap.dll` watches the taskbar's XAML visual tree, groups buttons by
   app, and rewrites or hides their labels.
+- For pins on other monitors, Windows has to create them, which it only does
+  with "Show my taskbar apps on" set to **All taskbars**. While any pin is
+  assigned to monitors, Unglom switches that on, remembers your own choice, and
+  hides every button your choice wouldn't show plus pins not assigned to that
+  monitor. A pinned app running only on other monitors keeps its pin, as
+  Windows does.
 - `TitleDiff` is the pure logic that works out which part of each title is
   distinctive.
 
@@ -34,6 +44,14 @@ window, and showing window titles. Unglom (named after Windows' own
 3. Unglom lives in the notification area (the system tray). Its menu has
    Pause/Resume, Start with Windows, the log folder, and Exit. Exiting or
    pausing puts the taskbar back exactly as it was.
+4. To put a pin on other monitors, pin the app as usual, then in Unglom's menu
+   open **Pinned apps on each monitor**, pick the app, and tick the monitors
+   it should appear on. **Put every pin back where Windows puts it** undoes
+   all of that.
+
+While any pin is assigned, Windows Settings shows "Show my taskbar apps on" as
+"All taskbars". Picking a different option there still works: Unglom takes it
+as your new choice.
 
 Run `install.cmd` again to update the installed copy; `uninstall.cmd` removes
 it. Logs are in `%LOCALAPPDATA%\Unglom`.
@@ -51,8 +69,11 @@ start the installed one again from the Start menu when done.
   when a Windows update changes the taskbar.
 - `out\UnglomTestWindows.exe 20 "Inbox - a - Outlook" "Inbox - b - Outlook"`
   opens windows of one app for 20 seconds. A title written `Old=>New` is
-  renamed halfway through.
-- `tools\capture-taskbar.ps1 <file.png>` screenshots the taskbar.
+  renamed halfway through. `--appid <id>` makes them belong to another app,
+  such as a pinned one, and `--at <x>,<y>` places them, e.g. on another monitor.
+- `tools\list-taskbar.ps1` lists every taskbar's buttons.
+- `tools\capture-taskbar.ps1 <file.png> [-All]` screenshots the main taskbar,
+  or every taskbar.
 - `tools\send-menu-command.ps1 <n>` sends a tray menu command (1 = Pause or
   Resume, 4 = Exit).
 

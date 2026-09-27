@@ -1,10 +1,13 @@
 // Opens one window per title argument so Unglom has a multi-window app to
 // label, then exits. A title written "Before=>After" is renamed halfway through.
 //
-// Usage: UnglomTestWindows.exe <seconds> <title> [<title> ...]
+// Usage: UnglomTestWindows.exe [--appid <id>] [--at <x>,<y>] <seconds> <title> [<title> ...]
+//   --appid  gives the windows another app's AppUserModelID, e.g. a pinned app's
+//   --at     places the first window there (unscaled coordinates) instead of 100,100
 
 #include <windows.h>
 #include <shellapi.h>
+#include <shobjidl.h>
 
 #include <string>
 #include <vector>
@@ -44,8 +47,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) 
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   int argc = 0;
   LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
-  if (argc < 3) return 1;
-  UINT seconds = static_cast<UINT>(_wtoi(argv[1]));
+  int first = 1;
+  int x = 100, y = 100;
+  for (; first + 1 < argc; first += 2) {
+    std::wstring option = argv[first];
+    if (option == L"--appid") {
+      SetCurrentProcessExplicitAppUserModelID(argv[first + 1]);
+    } else if (option == L"--at") {
+      if (swscanf_s(argv[first + 1], L"%d,%d", &x, &y) != 2) return 1;
+    } else {
+      break;
+    }
+  }
+  if (argc < first + 2) return 1;
+  UINT seconds = static_cast<UINT>(_wtoi(argv[first]));
 
   WNDCLASSW wc = {};
   wc.lpfnWndProc = WndProc;
@@ -55,7 +70,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
   wc.lpszClassName = L"UnglomTestWindow";
   RegisterClassW(&wc);
 
-  for (int i = 2; i < argc; ++i) {
+  for (int i = first + 1; i < argc; ++i) {
     std::wstring title = argv[i];
     std::wstring renameTo;
     size_t arrow = title.find(L"=>");
@@ -63,9 +78,9 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int) {
       renameTo = title.substr(arrow + 2);
       title = title.substr(0, arrow);
     }
-    int offset = (i - 2) * 40;
-    HWND hwnd = CreateWindowW(wc.lpszClassName, title.c_str(), WS_OVERLAPPEDWINDOW, 100 + offset,
-                              100 + offset, 400, 200, nullptr, nullptr, instance, nullptr);
+    int offset = (i - first - 1) * 40;
+    HWND hwnd = CreateWindowW(wc.lpszClassName, title.c_str(), WS_OVERLAPPEDWINDOW, x + offset,
+                              y + offset, 400, 200, nullptr, nullptr, instance, nullptr);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
     g_windows.push_back({hwnd, renameTo});
   }

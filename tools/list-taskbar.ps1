@@ -1,4 +1,5 @@
-# Lists the taskbar's buttons with each window's AppUserModelID and title.
+# Lists every taskbar's visible buttons: windows with their AppUserModelID and
+# title, and pinned apps that aren't running.
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 Add-Type @"
 using System;
@@ -29,13 +30,23 @@ public static class UnglomProbe {
 "@
 
 $root = [Windows.Automation.AutomationElement]::RootElement
-$trayCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, 'Shell_TrayWnd')
-$tray = $root.FindFirst([Windows.Automation.TreeScope]::Children, $trayCondition)
-$all = $tray.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
-foreach ($e in $all) {
-  $id = $e.Current.AutomationId
-  if ($id -notmatch '^Window: (0x[0-9a-f]+)') { continue }
-  $hwnd = [IntPtr][Convert]::ToInt64($Matches[1], 16)
-  $rect = $e.Current.BoundingRectangle
-  "{0,-10} x={1,-6} w={2,-5} {3,-24} {4}" -f $Matches[1], $rect.X, $rect.Width, [UnglomProbe]::Aumid($hwnd), [UnglomProbe]::Title($hwnd)
+$buttonCondition = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ClassNameProperty, 'Taskbar.TaskListButtonAutomationPeer')
+foreach ($class in 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd') {
+  $trayCondition = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, $class)
+  foreach ($tray in $root.FindAll([Windows.Automation.TreeScope]::Children, $trayCondition)) {
+    "=== $class at x=$($tray.Current.BoundingRectangle.X)"
+    foreach ($e in $tray.FindAll([Windows.Automation.TreeScope]::Descendants, $buttonCondition)) {
+      $rect = $e.Current.BoundingRectangle
+      # Recycled buttons are parked far above the screen.
+      if ($rect.IsEmpty -or $rect.Y -lt -5000) { continue }
+      $id = $e.Current.AutomationId
+      if ($id -match '^Window: (0x[0-9a-f]+)') {
+        $hwnd = [IntPtr][Convert]::ToInt64($Matches[1], 16)
+        "  {0,-10} x={1,-6} w={2,-5} {3,-32} {4}" -f $Matches[1], $rect.X, $rect.Width, [UnglomProbe]::Aumid($hwnd), [UnglomProbe]::Title($hwnd)
+      } elseif ($id -match '^Appid: (.*)') {
+        "  {0,-10} x={1,-6} w={2,-5} {3,-32} {4}" -f 'pinned', $rect.X, $rect.Width, $Matches[1], $e.Current.Name
+      }
+    }
+  }
 }

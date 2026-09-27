@@ -1,5 +1,6 @@
 #include "LabelManager.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -8,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "../common/AppResolver.h"
 #include "../common/Log.h"
 #include "../common/TitleDiff.h"
 #include "AppIdentity.h"
@@ -16,6 +18,7 @@ namespace xaml = winrt::Windows::UI::Xaml;
 using namespace std::chrono_literals;
 using winrt::Windows::System::DispatcherQueue;
 using winrt::Windows::System::DispatcherQueuePriority;
+using winrt::Windows::UI::Xaml::Automation::AutomationProperties;
 using winrt::Windows::UI::Xaml::Automation::Peers::FrameworkElementAutomationPeer;
 using winrt::Windows::UI::Xaml::Controls::TextBlock;
 using winrt::Windows::UI::Xaml::Media::VisualTreeHelper;
@@ -26,13 +29,24 @@ namespace {
 constexpr std::wstring_view kButtonType = L"Taskbar.TaskListButton";
 constexpr std::wstring_view kLabelType = L"Windows.UI.Xaml.Controls.TextBlock";
 constexpr std::wstring_view kLabelName = L"LabelControl";
+constexpr std::wstring_view kXamlSourceType = L"Windows.UI.Xaml.Hosting.DesktopWindowXamlSource";
 constexpr std::wstring_view kWindowIdPrefix = L"Window: ";
+constexpr std::wstring_view kPinIdPrefix = L"Appid: ";
+constexpr ULONGLONG kAppIdRefreshMs = 2'000;
 
 std::mutex g_mutex;
 std::map<DWORD, LabelManager*> g_managers;
 std::atomic<bool> g_active{true};
 Mode g_mode = Mode::Run;
 winrt::com_ptr<IXamlDiagnostics> g_diagnostics;
+
+struct SharedSettings {
+  PinSettings pins;
+  std::set<std::wstring> pinnedApps;
+};
+std::mutex g_settingsMutex;
+SharedSettings g_settings;
+std::atomic<int> g_settingsVersion{0};
 
 std::wstring_view ClassName(xaml::DependencyObject const& o, winrt::hstring& storage) {
   storage = winrt::get_class_name(o);
@@ -57,7 +71,11 @@ xaml::DependencyObject FindRoot(xaml::DependencyObject o) {
   return root;
 }
 
+// The attached property is set on task list buttons and, unlike the automation
+// peer, still answers while the button is collapsed.
 std::wstring AutomationId(xaml::FrameworkElement const& element) {
+  winrt::hstring id = AutomationProperties::GetAutomationId(element);
+  if (!id.empty()) return std::wstring(id);
   auto peer = FrameworkElementAutomationPeer::FromElement(element);
   if (!peer) peer = FrameworkElementAutomationPeer::CreatePeerForElement(element);
   return peer ? std::wstring(peer.GetAutomationId()) : std::wstring();
@@ -70,11 +88,38 @@ bool IsParked(xaml::UIElement const& button) {
   return offset.x < -5000 || offset.y < -5000;
 }
 
-HWND WindowForButton(xaml::FrameworkElement const& button) {
-  std::wstring id = AutomationId(button);
+HWND WindowForAutomationId(const std::wstring& id) {
   if (id.rfind(kWindowIdPrefix, 0) != 0) return nullptr;
   auto value = wcstoull(id.c_str() + kWindowIdPrefix.size(), nullptr, 16);
   return reinterpret_cast<HWND>(static_cast<uintptr_t>(value));
+}
+
+HWND WindowForButton(xaml::FrameworkElement const& button) {
+  return WindowForAutomationId(AutomationId(button));
+}
+
+void* Identity(winrt::Windows::Foundation::IInspectable const& o) {
+  return winrt::get_abi(o.as<winrt::Windows::Foundation::IUnknown>());
+}
+
+void* RootKey(xaml::DependencyObject const& o) { return Identity(FindRoot(o)); }
+
+// Minimized windows stay on the taskbar of the monitor they were minimized from.
+HMONITOR MonitorForWindow(HWND hwnd) {
+  WINDOWPLACEMENT placement = {sizeof(placement)};
+  if (IsIconic(hwnd) && GetWindowPlacement(hwnd, &placement)) {
+    return MonitorFromRect(&placement.rcNormalPosition, MONITOR_DEFAULTTONEAREST);
+  }
+  return MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+}
+
+xaml::UIElement FindNamed(xaml::DependencyObject const& o, std::wstring_view name) {
+  if (auto fe = o.try_as<xaml::FrameworkElement>(); fe && fe.Name() == name) return fe;
+  int n = VisualTreeHelper::GetChildrenCount(o);
+  for (int i = 0; i < n; ++i) {
+    if (auto found = FindNamed(VisualTreeHelper::GetChild(o, i), name)) return found;
+  }
+  return nullptr;
 }
 
 std::wstring Describe(xaml::DependencyObject const& o) {
@@ -138,6 +183,25 @@ void LabelManager::DeactivateAll() {
   }
 }
 
+void LabelManager::ReloadSettings() {
+  SharedSettings loaded;
+  loaded.pins = LoadPinSettings();
+  for (const PinnedApp& pin : ShortcutPins()) loaded.pinnedApps.insert(pin.appId);
+  for (const std::wstring& appId : StorePins()) loaded.pinnedApps.insert(appId);
+  Log(L"Settings: %ls, %zu pins assigned to monitors, %zu pinned apps",
+      loaded.pins.takenOver ? L"placing buttons per monitor" : L"leaving buttons alone",
+      loaded.pins.pinMonitors.size(), loaded.pinnedApps.size());
+  {
+    std::lock_guard lock(g_settingsMutex);
+    g_settings = std::move(loaded);
+    ++g_settingsVersion;
+  }
+  std::lock_guard lock(g_mutex);
+  for (auto& [thread, manager] : g_managers) {
+    if (manager->queue_) manager->queue_.TryEnqueue([manager] { manager->ScheduleRecompute(); });
+  }
+}
+
 LabelManager::LabelManager() : queue_(DispatcherQueue::GetForCurrentThread()) {
   if (!queue_) Log(L"No DispatcherQueue on this thread; labels here will not be managed");
 }
@@ -146,7 +210,8 @@ void LabelManager::OnElementAdded(InstanceHandle handle, const std::wstring& typ
                                   const std::wstring& name) {
   bool isButton = type == kButtonType;
   bool isLabel = type == kLabelType && name == kLabelName;
-  if (stopped_ || !queue_ || (!isButton && !isLabel)) return;
+  bool isSource = type == kXamlSourceType;
+  if (stopped_ || !queue_ || (!isButton && !isLabel && !isSource)) return;
 
   winrt::Windows::Foundation::IInspectable object;
   if (FAILED(g_diagnostics->GetIInspectableFromHandle(
@@ -154,9 +219,19 @@ void LabelManager::OnElementAdded(InstanceHandle handle, const std::wstring& typ
     return;
   }
 
+  if (isSource) {
+    // Each taskbar is a XAML island in its own window; this tells us which.
+    sources_.push_back(winrt::make_weak(object.as<xaml::Hosting::DesktopWindowXamlSource>()));
+    return;
+  }
+
   if (isButton) {
     buttons_[handle] = winrt::make_weak(object.as<xaml::FrameworkElement>());
     if (g_mode == Mode::Dump) ScheduleDump();
+    if (g_mode == Mode::Run) {
+      EnsureTimer();
+      ScheduleRecompute();
+    }
     return;
   }
   if (g_mode != Mode::Run) return;
@@ -177,18 +252,24 @@ void LabelManager::OnElementAdded(InstanceHandle handle, const std::wstring& typ
   }
   labels_[handle] = tracked;
 
-  if (!timer_) {
-    // Catches title changes the taskbar does not push into the label.
-    timer_ = queue_.CreateTimer();
-    timer_.Interval(1s);
-    timer_.IsRepeating(true);
-    timer_.Tick([this](auto&&, auto&&) { Guarded(L"Recompute", [&] { Recompute(); }); });
-    timer_.Start();
-  }
+  EnsureTimer();
   ScheduleRecompute();
 }
 
+void LabelManager::EnsureTimer() {
+  if (timer_) return;
+  // Catches title changes the taskbar does not push into the label, and windows
+  // moving between monitors.
+  timer_ = queue_.CreateTimer();
+  timer_.Interval(1s);
+  timer_.IsRepeating(true);
+  timer_.Tick([this](auto&&, auto&&) { Guarded(L"Recompute", [&] { Recompute(); }); });
+  timer_.Start();
+}
+
 void LabelManager::OnElementRemoved(InstanceHandle handle) {
+  // hidden_ and hiddenIndicators_ keep their entries: the task list takes
+  // buttons out and puts them back, and they come back still hidden.
   buttons_.erase(handle);
   auto it = labels_.find(handle);
   if (it == labels_.end()) return;
@@ -221,6 +302,14 @@ void LabelManager::ScheduleRecompute() {
 void LabelManager::Recompute() {
   if (stopped_ || g_mode != Mode::Run) return;
 
+  if (settingsVersion_ != g_settingsVersion) {
+    std::lock_guard lock(g_settingsMutex);
+    settings_ = g_settings.pins;
+    pinnedApps_ = g_settings.pinnedApps;
+    settingsVersion_ = g_settingsVersion;
+  }
+  if (settingsVersion_ > 0) PlaceButtons();
+
   // Buttons without a window (pinned apps) show how wide the taskbar makes icon-only buttons.
   for (auto& [handle, weak] : buttons_) {
     auto button = weak.get();
@@ -249,15 +338,23 @@ void LabelManager::Recompute() {
     ++it;
 
     auto button = FindButton(label);
-    if (!button || IsParked(button)) continue;
+    if (!button || IsParked(button) || button.Visibility() == xaml::Visibility::Collapsed) continue;
     HWND hwnd = WindowForButton(button);
     if (!hwnd || !IsWindow(hwnd)) continue;
 
     // Group per taskbar (each monitor has its own visual tree root) and per app.
-    auto root = FindRoot(button).as<winrt::Windows::Foundation::IUnknown>();
+    // A button standing in for a pin is icon-only, like the pin.
     wchar_t rootId[32];
-    swprintf_s(rootId, L"%p|", winrt::get_abi(root));
-    groups[rootId + AppKeyForWindow(hwnd)].push_back({&tracked, label, WindowTitle(hwnd)});
+    swprintf_s(rootId, L"%p|", RootKey(button));
+    std::wstring appKey;
+    if (standIns_.count(Identity(button))) {
+      wchar_t own[32];
+      swprintf_s(own, L"pin:%p", Identity(button));
+      appKey = own;
+    } else {
+      appKey = AppKeyForWindow(hwnd);
+    }
+    groups[rootId + appKey].push_back({&tracked, label, WindowTitle(hwnd)});
   }
 
   for (auto& [key, entries] : groups) {
@@ -266,6 +363,157 @@ void LabelManager::Recompute() {
     std::vector<std::wstring> texts = DistinctLabels(titles);
     for (size_t i = 0; i < entries.size(); ++i) Apply(*entries[i].tracked, entries[i].label, texts[i]);
   }
+}
+
+// While Unglom has switched Windows to "All taskbars", every taskbar has a button
+// for every window and pin. Show each window only where the user's own setting
+// would, and each pin on the monitors chosen for it.
+void LabelManager::PlaceButtons() {
+  if (!settings_.takenOver) {
+    ShowAll();
+    return;
+  }
+
+  std::map<void*, std::vector<PlacedButton>> roots;
+  for (auto& [handle, weak] : buttons_) {
+    auto button = weak.get();
+    if (!button || IsParked(button)) continue;
+    std::wstring id = AutomationId(button);
+    PlacedButton placed{button};
+    if (id.rfind(kPinIdPrefix, 0) == 0) {
+      placed.appId = Lowercase(id.substr(kPinIdPrefix.size()));
+    } else if (HWND hwnd = WindowForAutomationId(id); hwnd && IsWindow(hwnd)) {
+      placed.hwnd = hwnd;
+      placed.appId = AppIdForWindow(hwnd);
+    } else {
+      continue;
+    }
+    roots[RootKey(button)].push_back(std::move(placed));
+  }
+
+  standIns_.clear();
+  std::erase_if(hidden_, [](const auto& entry) { return !entry.second.get(); });
+  std::erase_if(hiddenIndicators_, [](const auto& entry) { return !entry.second.get(); });
+  std::vector<Monitor> monitors = ConnectedMonitors();
+  HMONITOR primary = MonitorFromPoint({0, 0}, MONITOR_DEFAULTTOPRIMARY);
+  auto isPinned = [&](const std::wstring& appId) { return pinnedApps_.count(appId) > 0; };
+  auto isConnected = [&](const std::wstring& monitorId) {
+    return std::any_of(monitors.begin(), monitors.end(),
+                       [&](const Monitor& m) { return m.id == monitorId; });
+  };
+
+  for (auto& [root, placed] : roots) {
+    HMONITOR monitor = RootMonitor(root);
+    auto here = std::find_if(monitors.begin(), monitors.end(),
+                             [&](const Monitor& m) { return m.handle == monitor; });
+    if (here == monitors.end()) continue;
+
+    auto pinShowsHere = [&](const std::wstring& appId) {
+      auto it = settings_.pinMonitors.find(appId);
+      if (it != settings_.pinMonitors.end()) {
+        if (std::find(it->second.begin(), it->second.end(), here->id) != it->second.end()) return true;
+        if (std::any_of(it->second.begin(), it->second.end(), isConnected)) return false;
+      }
+      return settings_.windows == TaskbarApps::AllTaskbars || monitor == primary;
+    };
+    auto windowShowsHere = [&](HWND hwnd) {
+      return settings_.windows == TaskbarApps::AllTaskbars || MonitorForWindow(hwnd) == monitor ||
+             (settings_.windows == TaskbarApps::MainAndWhereOpen && monitor == primary);
+    };
+
+    std::sort(placed.begin(), placed.end(), [](const PlacedButton& a, const PlacedButton& b) {
+      return a.button.ActualOffset().x < b.button.ActualOffset().x;
+    });
+    std::vector<bool> windowHere(placed.size());
+    std::set<std::wstring> appsHere;
+    for (size_t i = 0; i < placed.size(); ++i) {
+      if (placed[i].hwnd && windowShowsHere(placed[i].hwnd)) {
+        windowHere[i] = true;
+        appsHere.insert(placed[i].appId);
+      }
+    }
+    for (size_t i = 0; i < placed.size(); ++i) {
+      const PlacedButton& p = placed[i];
+      if (!p.hwnd) {
+        Show(p, pinShowsHere(p.appId), false);
+      } else if (windowHere[i]) {
+        Show(p, true, false);
+      } else {
+        // A pinned app running only on other monitors keeps its pin here, the
+        // way Windows shows it; its first button sits where the pin goes.
+        bool asPin = isPinned(p.appId) && pinShowsHere(p.appId) && appsHere.insert(p.appId).second;
+        Show(p, asPin, asPin);
+      }
+    }
+  }
+}
+
+HMONITOR LabelManager::RootMonitor(void* root) {
+  HWND& window = rootWindows_[root];
+  if (!window || !IsWindow(window)) {
+    window = nullptr;
+    std::erase_if(sources_, [](const auto& weak) { return !weak.get(); });
+    for (const auto& weak : sources_) {
+      auto source = weak.get();
+      auto content = source ? source.Content() : nullptr;
+      if (!content || RootKey(content) != root) continue;
+      source.as<IDesktopWindowXamlSourceNative>()->get_WindowHandle(&window);
+      wchar_t className[64] = {};
+      GetClassNameW(GetAncestor(window, GA_ROOT), className, ARRAYSIZE(className));
+      Log(L"Taskbar %p is in window %p (%ls)", root, window, className);
+      break;
+    }
+  }
+  return window ? MonitorFromWindow(window, MONITOR_DEFAULTTONULL) : nullptr;
+}
+
+std::wstring LabelManager::AppIdForWindow(HWND hwnd) {
+  ULONGLONG now = GetTickCount64();
+  CachedAppId& cached = appIds_[hwnd];
+  if (cached.appId.empty() || now - cached.at > kAppIdRefreshMs) {
+    cached.appId = TaskbarAppIdForWindow(hwnd);
+    cached.at = now;
+  }
+  if (appIds_.size() > 500) {
+    std::erase_if(appIds_, [&](const auto& entry) { return now - entry.second.at > kAppIdRefreshMs; });
+  }
+  return cached.appId;
+}
+
+void LabelManager::Show(const PlacedButton& placed, bool show, bool asPin) {
+  void* key = Identity(placed.button);
+  if (!show) {
+    if (placed.button.Visibility() != xaml::Visibility::Collapsed) {
+      placed.button.Visibility(xaml::Visibility::Collapsed);
+    }
+    hidden_[key] = winrt::make_weak(placed.button);
+  } else if (hidden_.erase(key)) {
+    placed.button.Visibility(xaml::Visibility::Visible);
+  }
+
+  if (asPin) standIns_.insert(key);
+  auto indicator = hiddenIndicators_.find(key);
+  if (asPin && indicator == hiddenIndicators_.end()) {
+    if (auto element = FindNamed(placed.button, L"RunningIndicator")) {
+      element.Opacity(0);
+      hiddenIndicators_[key] = winrt::make_weak(element);
+    }
+  } else if (!asPin && indicator != hiddenIndicators_.end()) {
+    if (auto element = indicator->second.get()) element.ClearValue(xaml::UIElement::OpacityProperty());
+    hiddenIndicators_.erase(indicator);
+  }
+}
+
+void LabelManager::ShowAll() {
+  for (auto& [key, weak] : hidden_) {
+    if (auto button = weak.get()) button.Visibility(xaml::Visibility::Visible);
+  }
+  hidden_.clear();
+  for (auto& [key, weak] : hiddenIndicators_) {
+    if (auto element = weak.get()) element.ClearValue(xaml::UIElement::OpacityProperty());
+  }
+  hiddenIndicators_.clear();
+  standIns_.clear();
 }
 
 void LabelManager::Apply(TrackedLabel& tracked, TextBlock const& label, const std::wstring& text) {
@@ -313,8 +561,10 @@ void LabelManager::RestoreAll() {
   }
   writing_ = false;
   labels_.clear();
+  size_t hidden = hidden_.size();
+  Guarded(L"ShowAll", [&] { ShowAll(); });
   buttons_.clear();
-  Log(L"Restored %d labels", restored);
+  Log(L"Restored %d labels and %zu hidden buttons", restored, hidden);
 }
 
 void LabelManager::ScheduleDump() {

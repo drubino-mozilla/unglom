@@ -3,8 +3,10 @@
 #include "TapCommon.h"
 
 #include <thread>
+#include <vector>
 
 #include "../common/Log.h"
+#include "../common/PinSettings.h"
 #include "LabelManager.h"
 
 using namespace unglom;
@@ -117,18 +119,79 @@ class Tap : public winrt::implements<Tap, IObjectWithSite, winrt::non_agile> {
     Log(L"AdviseVisualTreeChange returned 0x%08X", static_cast<unsigned>(hr));
     if (FAILED(hr)) return;
 
-    HANDLE waits[2];
-    DWORD count = 0;
-    if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, init_.loaderPid)) waits[count++] = process;
+    HANDLE stops[2];
+    DWORD stopCount = 0;
+    HANDLE stopEvent = nullptr;
+    if (HANDLE process = OpenProcess(SYNCHRONIZE, FALSE, init_.loaderPid)) stops[stopCount++] = process;
     if (!init_.stopEvent.empty()) {
-      if (HANDLE stop = OpenEventW(SYNCHRONIZE, FALSE, init_.stopEvent.c_str())) waits[count++] = stop;
+      stopEvent = OpenEventW(SYNCHRONIZE, FALSE, init_.stopEvent.c_str());
+      if (stopEvent) stops[stopCount++] = stopEvent;
     }
-    if (count > 0) WaitForMultipleObjects(count, waits, FALSE, INFINITE);
-    for (DWORD i = 0; i < count; ++i) CloseHandle(waits[i]);
+    if (stopCount > 0) {
+      if (init_.mode == Mode::Run) {
+        WatchSettings(stops, stopCount);
+      } else {
+        WaitForMultipleObjects(stopCount, stops, FALSE, INFINITE);
+      }
+    }
+    bool stopRequested = stopEvent && WaitForSingleObject(stopEvent, 0) == WAIT_OBJECT_0;
+    for (DWORD i = 0; i < stopCount; ++i) CloseHandle(stops[i]);
 
     Log(L"Loader stopped or exited; deactivating");
     LabelManager::DeactivateAll();
     service->UnadviseVisualTreeChange(watcher_.get());
+
+    // A loader that exits normally signals first and puts the setting back itself.
+    TaskbarApps own;
+    if (!stopRequested && ReadTakenOver(&own)) {
+      Log(L"Loader exited without stopping; putting back \"Show my taskbar apps on\"");
+      WriteTaskbarAppsSetting(own);
+      ClearTakenOver();
+    }
+  }
+
+  // Reloads the pin settings whenever they or the taskbar's pinned shortcuts
+  // change, until one of the stop handles is signaled.
+  void WatchSettings(HANDLE* stops, DWORD stopCount) {
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+    const wchar_t* keyPaths[] = {L"Software\\Unglom", L"Software\\Unglom\\PinMonitors", kTaskbandKey};
+    constexpr int kKeyCount = ARRAYSIZE(keyPaths);
+    HKEY keys[kKeyCount] = {};
+    HANDLE keyEvents[kKeyCount] = {};
+    auto watchKey = [&](int i) {
+      if (keys[i]) RegNotifyChangeKeyValue(keys[i], FALSE, REG_NOTIFY_CHANGE_LAST_SET, keyEvents[i], TRUE);
+    };
+    std::vector<HANDLE> waits(stops, stops + stopCount);
+    for (int i = 0; i < kKeyCount; ++i) {
+      RegCreateKeyExW(HKEY_CURRENT_USER, keyPaths[i], 0, nullptr, 0, KEY_NOTIFY, nullptr, &keys[i],
+                      nullptr);
+      keyEvents[i] = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+      watchKey(i);
+      waits.push_back(keyEvents[i]);
+    }
+    HANDLE shortcuts = FindFirstChangeNotificationW(
+        PinnedShortcutsDir().c_str(), FALSE, FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE);
+    if (shortcuts != INVALID_HANDLE_VALUE) waits.push_back(shortcuts);
+
+    LabelManager::ReloadSettings();
+    for (;;) {
+      DWORD result = WaitForMultipleObjects(static_cast<DWORD>(waits.size()), waits.data(), FALSE, INFINITE);
+      DWORD index = result - WAIT_OBJECT_0;
+      if (index < stopCount || index >= waits.size()) break;
+      Sleep(200);  // Settle a burst of changes into one reload.
+      for (int i = 0; i < kKeyCount; ++i) {
+        if (waits[index] == keyEvents[i]) watchKey(i);
+      }
+      if (waits[index] == shortcuts) FindNextChangeNotification(shortcuts);
+      LabelManager::ReloadSettings();
+    }
+
+    if (shortcuts != INVALID_HANDLE_VALUE) FindCloseChangeNotification(shortcuts);
+    for (int i = 0; i < kKeyCount; ++i) {
+      if (keys[i]) RegCloseKey(keys[i]);
+      CloseHandle(keyEvents[i]);
+    }
+    CoUninitialize();
   }
 
   winrt::com_ptr<IXamlDiagnostics> diagnostics_;
