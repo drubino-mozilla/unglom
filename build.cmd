@@ -38,9 +38,10 @@ echo === Unglom.exe ===
 if exist "%OUT%\Unglom.exe" "%OUT%\Unglom.exe" --stop-this-copy
 rc /nologo /i "%ROOT%res" /i "%ROOT%src\loader" /fo "%OUT%\obj\loader\Unglom.res" "%ROOT%src\loader\Unglom.rc" || goto :fail
 cl %CFLAGS% /Fo"%OUT%\obj\loader\\" /Fd"%OUT%\obj\loader\\" /Fe"%OUT%\Unglom.exe" ^
-  "%ROOT%src\loader\Unglom.cpp" "%ROOT%src\common\Log.cpp" ^
+  "%ROOT%src\loader\Unglom.cpp" "%ROOT%src\loader\PinsWindow.cpp" "%ROOT%src\common\Log.cpp" ^
   "%ROOT%src\common\AppResolver.cpp" "%ROOT%src\common\PinSettings.cpp" "%OUT%\obj\loader\Unglom.res" ^
   /link /DEBUG /SUBSYSTEM:WINDOWS /MANIFEST:NO user32.lib shell32.lib advapi32.lib ole32.lib ^
+  gdi32.lib comctl32.lib uxtheme.lib dwmapi.lib ^
   || goto :fail
 
 echo.

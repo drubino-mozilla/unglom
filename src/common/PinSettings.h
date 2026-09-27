@@ -45,6 +45,7 @@ std::vector<Monitor> ConnectedMonitors();
 struct PinnedApp {
   std::wstring appId;
   std::wstring name;
+  std::wstring shortcut;  // Empty for Store apps.
 };
 // Taskbar pins that have a shortcut, with the shortcut's name.
 std::vector<PinnedApp> ShortcutPins();

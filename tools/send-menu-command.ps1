@@ -1,5 +1,6 @@
 # Sends a tray-menu command to the running Unglom.exe, for testing.
-# Commands: 1 = Pause/Resume, 2 = Start with Windows, 3 = Open log folder, 4 = Exit
+# Commands: 1 = Pause/Resume, 2 = Start with Windows, 3 = Open log folder, 4 = Exit,
+#           5 = Pinned apps on each monitor
 param([Parameter(Mandatory)] [int] $Command)
 
 Add-Type @"

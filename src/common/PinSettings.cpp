@@ -186,8 +186,9 @@ std::vector<PinnedApp> ShortcutPins() {
   if (find == INVALID_HANDLE_VALUE) return pins;
   do {
     std::wstring name = found.cFileName;
-    std::wstring appId = TaskbarAppIdForShortcut(dir + L"\\" + name);
-    if (!appId.empty()) pins.push_back({appId, name.substr(0, name.size() - 4)});
+    std::wstring path = dir + L"\\" + name;
+    std::wstring appId = TaskbarAppIdForShortcut(path);
+    if (!appId.empty()) pins.push_back({appId, name.substr(0, name.size() - 4), path});
   } while (FindNextFileW(find, &found));
   FindClose(find);
   return pins;

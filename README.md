@@ -44,10 +44,11 @@ only. Unglom lets you pick, per pin, which monitors' taskbars it appears on.
 3. Unglom lives in the notification area (the system tray). Its menu has
    Pause/Resume, Start with Windows, the log folder, and Exit. Exiting or
    pausing puts the taskbar back exactly as it was.
-4. To put a pin on other monitors, pin the app as usual, then in Unglom's menu
-   open **Pinned apps on each monitor**, pick the app, and tick the monitors
-   it should appear on. **Put every pin back where Windows puts it** undoes
-   all of that.
+4. To put a pin on other monitors, pin the app as usual, then choose
+   **Pinned apps on each monitor...** in Unglom's menu. The window lists every
+   pinned app with a checkbox per monitor; tick the monitors each app should
+   appear on. Changes apply right away. **Put every pin back where Windows
+   puts it** undoes all of that.
 
 While any pin is assigned, Windows Settings shows "Show my taskbar apps on" as
 "All taskbars". Picking a different option there still works: Unglom takes it
@@ -75,7 +76,7 @@ start the installed one again from the Start menu when done.
 - `tools\capture-taskbar.ps1 <file.png> [-All]` screenshots the main taskbar,
   or every taskbar.
 - `tools\send-menu-command.ps1 <n>` sends a tray menu command (1 = Pause or
-  Resume, 4 = Exit).
+  Resume, 4 = Exit, 5 = the pinned apps window).
 
 Explorer keeps every copy of the DLL it has loaded, so each start or resume
 loads a freshly named copy from `%LOCALAPPDATA%\Unglom\bin`; older copies go
