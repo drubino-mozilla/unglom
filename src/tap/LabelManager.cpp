@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <functional>
 #include <limits>
 #include <map>
 #include <mutex>
@@ -30,6 +31,9 @@ constexpr std::wstring_view kButtonType = L"Taskbar.TaskListButton";
 constexpr std::wstring_view kLabelType = L"Windows.UI.Xaml.Controls.TextBlock";
 constexpr std::wstring_view kLabelName = L"LabelControl";
 constexpr std::wstring_view kXamlSourceType = L"Windows.UI.Xaml.Hosting.DesktopWindowXamlSource";
+constexpr std::wstring_view kTaskbarRowName = L"TaskbarFrameRepeater";
+constexpr std::wstring_view kTrayType = L"SystemTray.SystemTrayFrame";
+constexpr double kClockGap = 8;
 constexpr std::wstring_view kWindowIdPrefix = L"Window: ";
 constexpr std::wstring_view kPinIdPrefix = L"Appid: ";
 constexpr ULONGLONG kAppIdRefreshMs = 2'000;
@@ -308,7 +312,10 @@ void LabelManager::Recompute() {
     pinnedApps_ = g_settings.pinnedApps;
     settingsVersion_ = g_settingsVersion;
   }
-  if (settingsVersion_ > 0) PlaceButtons();
+  if (settingsVersion_ > 0) {
+    PlaceButtons();
+    AlignIcons();
+  }
 
   // Buttons without a window (pinned apps) show how wide the taskbar makes icon-only buttons.
   for (auto& [handle, weak] : buttons_) {
@@ -448,6 +455,85 @@ void LabelManager::PlaceButtons() {
   }
 }
 
+// Each taskbar's buttons, Start included, sit in one full-width row that the
+// taskbar lays out itself. Aligning that row within its taskbar moves them all;
+// on the right it has to stay clear of the clock, which is drawn over the row.
+void LabelManager::AlignIcons() {
+  if (settings_.iconAlignment.empty() && alignedRows_.empty()) return;
+  std::vector<Monitor> monitors = ConnectedMonitors();
+  for (const auto& weakSource : sources_) {
+    auto source = weakSource.get();
+    auto content = source ? source.Content() : nullptr;
+    if (!content) continue;
+    void* root = RootKey(content);
+    auto row = FindElement(root, FindRoot(content), kTaskbarRowName, rows_);
+    if (!row) continue;
+
+    HMONITOR monitor = RootMonitor(root);
+    auto here = std::find_if(monitors.begin(), monitors.end(),
+                             [&](const Monitor& m) { return m.handle == monitor; });
+    auto setting = here == monitors.end() ? settings_.iconAlignment.end()
+                                          : settings_.iconAlignment.find(here->id);
+    if (setting == settings_.iconAlignment.end()) {
+      if (alignedRows_.erase(root)) {
+        row.ClearValue(xaml::FrameworkElement::HorizontalAlignmentProperty());
+        row.ClearValue(xaml::FrameworkElement::MarginProperty());
+      }
+      continue;
+    }
+
+    auto alignment = setting->second == IconAlignment::Left    ? xaml::HorizontalAlignment::Left
+                     : setting->second == IconAlignment::Right ? xaml::HorizontalAlignment::Right
+                                                               : xaml::HorizontalAlignment::Center;
+    double right = 0;
+    if (alignment == xaml::HorizontalAlignment::Right) {
+      if (auto tray = FindElement(root, FindRoot(content), kTrayType, trays_)) {
+        right = tray.ActualWidth() + kClockGap;
+      }
+    }
+    if (row.HorizontalAlignment() != alignment) row.HorizontalAlignment(alignment);
+    if (row.Margin().Right != right) row.Margin({0, 0, right, 0});
+    if (!alignedRows_.count(root)) {
+      Log(L"Taskbar %p icons aligned %ls", root,
+          setting->second == IconAlignment::Left ? L"left"
+          : setting->second == IconAlignment::Right ? L"right" : L"center");
+    }
+    alignedRows_[root] = winrt::make_weak(row);
+  }
+}
+
+// The first element in the tree whose name or type is `key`, skipping task
+// list buttons, remembered per root in `cache`.
+xaml::FrameworkElement LabelManager::FindElement(void* root, xaml::DependencyObject const& top,
+                                                 std::wstring_view key, ElementCache& cache) {
+  if (auto cached = cache[root].get()) return cached;
+  std::function<xaml::FrameworkElement(xaml::DependencyObject const&)> find =
+      [&](xaml::DependencyObject const& o) -> xaml::FrameworkElement {
+    winrt::hstring type;
+    if (ClassName(o, type) == kButtonType) return nullptr;
+    auto element = o.try_as<xaml::FrameworkElement>();
+    if (element && (type == key || std::wstring_view(element.Name()) == key)) return element;
+    int n = VisualTreeHelper::GetChildrenCount(o);
+    for (int i = 0; i < n; ++i) {
+      if (auto found = find(VisualTreeHelper::GetChild(o, i))) return found;
+    }
+    return nullptr;
+  };
+  auto found = find(top);
+  if (found) cache[root] = winrt::make_weak(found);
+  return found;
+}
+
+void LabelManager::UnalignAll() {
+  for (auto& [root, weak] : alignedRows_) {
+    if (auto row = weak.get()) {
+      row.ClearValue(xaml::FrameworkElement::HorizontalAlignmentProperty());
+      row.ClearValue(xaml::FrameworkElement::MarginProperty());
+    }
+  }
+  alignedRows_.clear();
+}
+
 HMONITOR LabelManager::RootMonitor(void* root) {
   HWND& window = rootWindows_[root];
   if (!window || !IsWindow(window)) {
@@ -563,6 +649,7 @@ void LabelManager::RestoreAll() {
   labels_.clear();
   size_t hidden = hidden_.size();
   Guarded(L"ShowAll", [&] { ShowAll(); });
+  Guarded(L"UnalignAll", [&] { UnalignAll(); });
   buttons_.clear();
   Log(L"Restored %d labels and %zu hidden buttons", restored, hidden);
 }

@@ -58,6 +58,13 @@ class LabelManager {
   std::wstring AppIdForWindow(HWND hwnd);
   void Show(const PlacedButton& placed, bool show, bool asPin);
   void ShowAll();
+  using ElementCache =
+      std::unordered_map<void*, winrt::weak_ref<winrt::Windows::UI::Xaml::FrameworkElement>>;
+  void AlignIcons();
+  winrt::Windows::UI::Xaml::FrameworkElement FindElement(void* root,
+                                                         winrt::Windows::UI::Xaml::DependencyObject const& top,
+                                                         std::wstring_view key, ElementCache& cache);
+  void UnalignAll();
   void Apply(TrackedLabel& tracked, winrt::Windows::UI::Xaml::Controls::TextBlock const& label,
              const std::wstring& text);
   void Unregister(TrackedLabel& tracked);
@@ -84,6 +91,10 @@ class LabelManager {
   std::unordered_map<HWND, CachedAppId> appIds_;
   std::vector<winrt::weak_ref<winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource>> sources_;
   std::unordered_map<void*, HWND> rootWindows_;
+  // Per taskbar root: its button row, the rows Unglom has aligned, and the clock area.
+  ElementCache rows_;
+  ElementCache alignedRows_;
+  ElementCache trays_;
   // Keyed by the button's identity, which outlives its InstanceHandle.
   std::unordered_map<void*, winrt::weak_ref<winrt::Windows::UI::Xaml::FrameworkElement>> hidden_;
   // Buttons standing in for a pin whose app only runs on other monitors, and

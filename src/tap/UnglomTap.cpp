@@ -154,7 +154,8 @@ class Tap : public winrt::implements<Tap, IObjectWithSite, winrt::non_agile> {
   // change, until one of the stop handles is signaled.
   void WatchSettings(HANDLE* stops, DWORD stopCount) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    const wchar_t* keyPaths[] = {L"Software\\Unglom", L"Software\\Unglom\\PinMonitors", kTaskbandKey};
+    const wchar_t* keyPaths[] = {L"Software\\Unglom", L"Software\\Unglom\\PinMonitors",
+                                 L"Software\\Unglom\\IconAlignment", kTaskbandKey};
     constexpr int kKeyCount = ARRAYSIZE(keyPaths);
     HKEY keys[kKeyCount] = {};
     HANDLE keyEvents[kKeyCount] = {};

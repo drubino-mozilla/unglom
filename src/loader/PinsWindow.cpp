@@ -18,11 +18,16 @@ namespace {
 
 constexpr wchar_t kWindowClass[] = L"UnglomPinsWindow";
 constexpr wchar_t kHint[] =
-    L"Tick the monitors whose taskbar each pinned app should appear on. Changes apply right "
-    L"away. Every app needs at least one monitor.";
+    L"Choose how each monitor's taskbar aligns its icons, and tick the monitors whose taskbar "
+    L"each pinned app should appear on. Changes apply right away. Every app needs at least one "
+    L"monitor.";
+constexpr wchar_t kAlignmentLabel[] = L"Icon alignment";
+constexpr const wchar_t* kAlignmentNames[] = {L"Left", L"Center", L"Right"};  // IconAlignment - 1
 constexpr wchar_t kResetText[] = L"Put every pin back where Windows puts it";
 constexpr INT_PTR kListId = 100;
 constexpr INT_PTR kResetId = 101;  // Close is IDCANCEL, so Esc closes too.
+constexpr INT_PTR kAlignmentIdBase = 200;  // One dropdown per monitor from here.
+constexpr UINT WM_APP_LAYOUT = WM_APP + 1;
 
 // Sizes in DIPs.
 constexpr int kMargin = 12;
@@ -38,6 +43,8 @@ struct {
   HWND list = nullptr;
   HWND reset = nullptr;
   HWND close = nullptr;
+  HWND alignmentLabel = nullptr;
+  std::vector<HWND> alignments;  // Per monitor, above its column.
   HFONT font = nullptr;
   HTHEME checkTheme = nullptr;
   UINT dpi = 96;
@@ -54,6 +61,9 @@ struct {
 } w;
 
 int Scale(int dips) { return MulDiv(dips, static_cast<int>(w.dpi), 96); }
+
+void Reload();
+void Layout();
 
 TaskbarApps OwnTaskbarApps() {
   TaskbarApps own;
@@ -150,6 +160,46 @@ void UpdateShown() {
   }
   EnableWindow(w.reset, !w.settings.pinMonitors.empty());
   InvalidateRect(w.list, nullptr, FALSE);
+
+  IconAlignment windows = WindowsIconAlignment();
+  for (size_t m = 0; m < w.alignments.size() && m < w.monitors.size(); ++m) {
+    auto it = w.settings.iconAlignment.find(w.monitors[m].id);
+    IconAlignment alignment = it == w.settings.iconAlignment.end() ? windows : it->second;
+    SendMessageW(w.alignments[m], CB_SETCURSEL, static_cast<DWORD>(alignment) - 1, 0);
+  }
+}
+
+void CreateAlignmentChoices() {
+  for (HWND combo : w.alignments) DestroyWindow(combo);
+  w.alignments.clear();
+  auto instance = reinterpret_cast<HINSTANCE>(GetWindowLongPtrW(w.hwnd, GWLP_HINSTANCE));
+  HWND previous = w.alignmentLabel;
+  for (size_t m = 0; m < w.monitors.size(); ++m) {
+    HWND combo = CreateWindowW(WC_COMBOBOXW, L"",
+                               WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST, 0, 0,
+                               Scale(100), Scale(200), w.hwnd,
+                               reinterpret_cast<HMENU>(kAlignmentIdBase + static_cast<INT_PTR>(m)),
+                               instance, nullptr);
+    for (const wchar_t* name : kAlignmentNames) {
+      SendMessageW(combo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(name));
+    }
+    SendMessageW(combo, WM_SETFONT, reinterpret_cast<WPARAM>(w.font), FALSE);
+    SetWindowTheme(combo, w.dark ? L"DarkMode_CFD" : nullptr, nullptr);
+    // Tab order follows the monitor columns, before the list.
+    SetWindowPos(combo, previous, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    previous = combo;
+    w.alignments.push_back(combo);
+  }
+}
+
+void OnAlignmentChosen(size_t monitor) {
+  if (monitor >= w.monitors.size() || monitor >= w.alignments.size()) return;
+  LRESULT selection = SendMessageW(w.alignments[monitor], CB_GETCURSEL, 0, 0);
+  if (selection < 0 || selection > 2) return;
+  auto alignment = static_cast<IconAlignment>(selection + 1);
+  Log(L"%ls icons now aligned %ls", w.monitors[monitor].label.c_str(), kAlignmentNames[selection]);
+  SaveIconAlignment(w.monitors[monitor].id, alignment);
+  Reload();
 }
 
 void FillList() {
@@ -187,6 +237,7 @@ void FillList() {
     ListView_InsertItem(w.list, &item);
   }
   SendMessageW(w.list, WM_SETREDRAW, TRUE, 0);
+  CreateAlignmentChoices();
 }
 
 // Changes whenever the list of pinned apps might have, and is far cheaper to
@@ -234,6 +285,7 @@ void Reload() {
   if (pinsChanged || !SameIds(monitors, w.monitors)) {
     w.monitors = std::move(monitors);
     FillList();
+    Layout();
   }
   UpdateShown();
 }
@@ -306,8 +358,14 @@ LRESULT OnListCustomDraw(NMLVCUSTOMDRAW* draw) {
 // light-theme text colors, so set them here.
 LRESULT CALLBACK ListSubclassProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam, UINT_PTR,
                                   DWORD_PTR) {
+  // The alignment dropdowns follow the columns.
+  if (message == WM_HSCROLL) PostMessageW(GetParent(hwnd), WM_APP_LAYOUT, 0, 0);
   if (message == WM_NOTIFY) {
     auto* header = reinterpret_cast<NMHDR*>(lparam);
+    if (header->hwndFrom == ListView_GetHeader(hwnd) &&
+        (header->code == HDN_ITEMCHANGEDW || header->code == HDN_ITEMCHANGEDA)) {
+      PostMessageW(GetParent(hwnd), WM_APP_LAYOUT, 0, 0);
+    }
     if (header->hwndFrom == ListView_GetHeader(hwnd) && header->code == NM_CUSTOMDRAW) {
       auto* draw = reinterpret_cast<NMCUSTOMDRAW*>(lparam);
       if (draw->dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
@@ -347,6 +405,13 @@ int TextWidth(const wchar_t* text) {
   return size.cx;
 }
 
+int AlignmentRowHeight() {
+  if (w.alignments.empty()) return 0;
+  RECT combo;
+  GetWindowRect(w.alignments[0], &combo);  // A dropdown list's closed height.
+  return combo.bottom - combo.top;
+}
+
 void Layout() {
   RECT client;
   GetClientRect(w.hwnd, &client);
@@ -354,9 +419,27 @@ void Layout() {
   int width = client.right - 2 * margin;
   int hintHeight = TextHeight(kHint, width);
   int buttonsTop = client.bottom - margin - buttonHeight;
-  int listTop = margin + hintHeight + gap;
+  int rowTop = margin + hintHeight + gap;
+  int rowHeight = AlignmentRowHeight();
+  int listTop = rowTop + rowHeight + gap;
   MoveWindow(w.hint, margin, margin, width, hintHeight, TRUE);
   MoveWindow(w.list, margin, listTop, width, std::max(0, buttonsTop - gap - listTop), TRUE);
+
+  // Each dropdown sits above its monitor's column.
+  HWND header = ListView_GetHeader(w.list);
+  RECT nameColumn = {};
+  Header_GetItemRect(header, 0, &nameColumn);
+  MapWindowPoints(header, w.hwnd, reinterpret_cast<POINT*>(&nameColumn), 2);
+  MoveWindow(w.alignmentLabel, nameColumn.left + Scale(6), rowTop, nameColumn.right - nameColumn.left,
+             rowHeight, TRUE);
+  for (size_t m = 0; m < w.alignments.size(); ++m) {
+    RECT column = {};
+    Header_GetItemRect(header, static_cast<int>(m) + 1, &column);
+    MapWindowPoints(header, w.hwnd, reinterpret_cast<POINT*>(&column), 2);
+    int comboWidth = std::min<int>(column.right - column.left - Scale(8), Scale(110));
+    MoveWindow(w.alignments[m], (column.left + column.right - comboWidth) / 2, rowTop, comboWidth,
+               Scale(200), TRUE);
+  }
   int resetWidth = TextWidth(kResetText) + Scale(32);
   int closeWidth = Scale(90);
   MoveWindow(w.reset, margin, buttonsTop, resetWidth, buttonHeight, TRUE);
@@ -377,8 +460,8 @@ void SizeToContent() {
   RECT row = {};
   int rowHeight = ListView_GetItemRect(w.list, 0, &row, LVIR_BOUNDS) ? row.bottom - row.top : Scale(28);
   int listHeight = (header.bottom - header.top) + rowHeight * ListView_GetItemCount(w.list) + Scale(4);
-  int clientHeight = margin + TextHeight(kHint, clientWidth - 2 * margin) + gap + listHeight + gap +
-                     Scale(kButtonHeight) + margin;
+  int clientHeight = margin + TextHeight(kHint, clientWidth - 2 * margin) + gap +
+                     AlignmentRowHeight() + gap + listHeight + gap + Scale(kButtonHeight) + margin;
 
   RECT frame = {0, 0, clientWidth, clientHeight};
   AdjustWindowRectExForDpi(&frame, GetWindowLongW(w.hwnd, GWL_STYLE), FALSE,
@@ -415,6 +498,7 @@ void ApplyTheme() {
   SetWindowTheme(w.list, w.dark ? L"DarkMode_Explorer" : L"Explorer", nullptr);
   SetWindowTheme(ListView_GetHeader(w.list), w.dark ? L"DarkMode_ItemsView" : nullptr, nullptr);
   for (HWND button : {w.reset, w.close}) SetWindowTheme(button, w.dark ? L"DarkMode_Explorer" : nullptr, nullptr);
+  for (HWND combo : w.alignments) SetWindowTheme(combo, w.dark ? L"DarkMode_CFD" : nullptr, nullptr);
   ListView_SetBkColor(w.list, w.background);
   ListView_SetTextBkColor(w.list, w.background);
   ListView_SetTextColor(w.list, w.text);
@@ -430,9 +514,10 @@ void ApplyDpi() {
   NONCLIENTMETRICSW metrics = {sizeof(metrics)};
   SystemParametersInfoForDpi(SPI_GETNONCLIENTMETRICS, sizeof(metrics), &metrics, 0, w.dpi);
   w.font = CreateFontIndirectW(&metrics.lfMessageFont);
-  for (HWND child : {w.hint, w.list, w.reset, w.close}) {
+  for (HWND child : {w.hint, w.alignmentLabel, w.list, w.reset, w.close}) {
     SendMessageW(child, WM_SETFONT, reinterpret_cast<WPARAM>(w.font), TRUE);
   }
+  for (HWND combo : w.alignments) SendMessageW(combo, WM_SETFONT, reinterpret_cast<WPARAM>(w.font), TRUE);
   ApplyTheme();
 }
 
@@ -444,6 +529,9 @@ LRESULT CALLBACK PinsWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
       auto instance = reinterpret_cast<CREATESTRUCTW*>(lparam)->hInstance;
       w.hint = CreateWindowW(L"STATIC", kHint, WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0,
                              0, 0, hwnd, nullptr, instance, nullptr);
+      w.alignmentLabel = CreateWindowW(L"STATIC", kAlignmentLabel,
+                                       WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX | SS_CENTERIMAGE,
+                                       0, 0, 0, 0, hwnd, nullptr, instance, nullptr);
       w.list = CreateWindowExW(0, WC_LISTVIEWW, L"",
                                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_BORDER | LVS_REPORT |
                                    LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
@@ -497,6 +585,13 @@ LRESULT CALLBACK PinsWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
     }
     case WM_CTLCOLORBTN:
       return reinterpret_cast<LRESULT>(w.backgroundBrush);
+    case WM_CTLCOLORLISTBOX:  // The dropdowns' open lists.
+      SetTextColor(reinterpret_cast<HDC>(wparam), w.text);
+      SetBkColor(reinterpret_cast<HDC>(wparam), w.background);
+      return reinterpret_cast<LRESULT>(w.backgroundBrush);
+    case WM_APP_LAYOUT:
+      Layout();
+      return 0;
     case WM_ACTIVATE:
       // Pins may have changed while the window was in the background.
       if (LOWORD(wparam) != WA_INACTIVE) Reload();
@@ -521,6 +616,10 @@ LRESULT CALLBACK PinsWndProc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lpar
       return 0;
     }
     case WM_COMMAND:
+      if (HIWORD(wparam) == CBN_SELCHANGE && LOWORD(wparam) >= kAlignmentIdBase) {
+        OnAlignmentChosen(LOWORD(wparam) - kAlignmentIdBase);
+        return 0;
+      }
       switch (LOWORD(wparam)) {
         case kResetId:
           Log(L"Putting every pin back where Windows puts it");

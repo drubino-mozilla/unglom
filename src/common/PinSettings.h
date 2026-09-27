@@ -11,21 +11,30 @@ namespace unglom {
 // Values of Windows' "Show my taskbar apps on" setting (MMTaskbarMode).
 enum class TaskbarApps : DWORD { AllTaskbars = 0, MainAndWhereOpen = 1, WhereOpen = 2 };
 
+enum class IconAlignment : DWORD { Left = 1, Center = 2, Right = 3 };
+
 // Per-monitor pins, stored under HKCU\Software\Unglom:
 //   WindowTaskbars          present only while Unglom has switched Windows to "All taskbars"
 //                           and hides buttons itself; holds the user's own TaskbarApps choice
 //   PinMonitors\<app id>    the MonitorIds a pin shows on (REG_MULTI_SZ). Pins without a
 //                           value, or whose monitors are all disconnected, show where
 //                           Windows would show them.
+//   IconAlignment\<monitor id>  an IconAlignment for that monitor's taskbar (DWORD);
+//                           monitors without a value align icons as Windows does
 struct PinSettings {
   bool takenOver = false;
   TaskbarApps windows = TaskbarApps::WhereOpen;
   std::map<std::wstring, std::vector<std::wstring>> pinMonitors;  // Keys are lowercase app IDs.
+  std::map<std::wstring, IconAlignment> iconAlignment;             // Keys are MonitorIds.
 };
 
 PinSettings LoadPinSettings();
 void SavePinMonitors(const std::wstring& appId, const std::vector<std::wstring>& monitorIds);
 void ClearPinMonitors();
+// Windows' own "Taskbar alignment" setting, which applies to every taskbar.
+IconAlignment WindowsIconAlignment();
+// Saving Windows' own alignment removes the monitor's value.
+void SaveIconAlignment(const std::wstring& monitorId, IconAlignment alignment);
 
 TaskbarApps ReadTaskbarAppsSetting();
 void WriteTaskbarAppsSetting(TaskbarApps value);

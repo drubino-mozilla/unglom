@@ -13,6 +13,8 @@ namespace {
 
 constexpr wchar_t kUnglomKey[] = L"Software\\Unglom";
 constexpr wchar_t kPinMonitorsKey[] = L"Software\\Unglom\\PinMonitors";
+constexpr wchar_t kIconAlignmentKey[] = L"Software\\Unglom\\IconAlignment";
+constexpr wchar_t kWindowsAlignmentValue[] = L"TaskbarAl";
 constexpr wchar_t kWindowTaskbarsValue[] = L"WindowTaskbars";
 constexpr wchar_t kAdvancedKey[] = L"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced";
 constexpr wchar_t kTaskbarAppsValue[] = L"MMTaskbarMode";
@@ -79,7 +81,27 @@ PinSettings LoadPinSettings() {
     for (std::wstring& id : ids) id = Lowercase(id);
     if (!ids.empty()) settings.pinMonitors[appId] = ids;
   }
+  for (const std::wstring& monitorId : ValueNames(kIconAlignmentKey)) {
+    DWORD value = 0;
+    if (ReadDword(kIconAlignmentKey, monitorId.c_str(), &value) && value >= 1 && value <= 3) {
+      settings.iconAlignment[monitorId] = static_cast<IconAlignment>(value);
+    }
+  }
   return settings;
+}
+
+IconAlignment WindowsIconAlignment() {
+  DWORD value = 1;  // Centered when the value is missing.
+  ReadDword(kAdvancedKey, kWindowsAlignmentValue, &value);
+  return value == 0 ? IconAlignment::Left : IconAlignment::Center;
+}
+
+void SaveIconAlignment(const std::wstring& monitorId, IconAlignment alignment) {
+  if (alignment == WindowsIconAlignment()) {
+    RegDeleteKeyValueW(HKEY_CURRENT_USER, kIconAlignmentKey, monitorId.c_str());
+  } else {
+    WriteDword(kIconAlignmentKey, monitorId.c_str(), static_cast<DWORD>(alignment));
+  }
 }
 
 void SavePinMonitors(const std::wstring& appId, const std::vector<std::wstring>& monitorIds) {

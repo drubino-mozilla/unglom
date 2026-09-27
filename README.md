@@ -15,6 +15,8 @@ window, and showing window titles. Unglom (named after Windows' own
 It can also put pinned apps on other monitors' taskbars. Windows either shows
 every pin (and every window) on every taskbar, or pins on the main taskbar
 only. Unglom lets you pick, per pin, which monitors' taskbars it appears on.
+And it can align each monitor's taskbar icons left, center or right, where
+Windows only offers left or center for all taskbars at once.
 
 ## How it works
 
@@ -49,6 +51,9 @@ only. Unglom lets you pick, per pin, which monitors' taskbars it appears on.
    pinned app with a checkbox per monitor; tick the monitors each app should
    appear on. Changes apply right away. **Put every pin back where Windows
    puts it** undoes all of that.
+5. The same window has an **Icon alignment** dropdown above each monitor's
+   column. The icons (and the Start button, which sits with them) move to
+   that side of the taskbar; on the right they stop short of the clock.
 
 While any pin is assigned, Windows Settings shows "Show my taskbar apps on" as
 "All taskbars". Picking a different option there still works: Unglom takes it
