@@ -22,7 +22,38 @@ window, and showing window titles. Unglom (named after Windows' own
 - `TitleDiff` is the pure logic that works out which part of each title is
   distinctive.
 
+## Using it
+
+1. In Windows Settings > Personalization > Taskbar > Taskbar behaviors, set
+   "Combine taskbar buttons and hide labels" to **Never**.
+2. Double-click `build.cmd`. The first run downloads Microsoft's C++ compiler
+   and Windows SDK into `%LOCALAPPDATA%\unglom-toolchain` (no admin needed,
+   about 500 MB; this accepts the Visual Studio Build Tools license).
+3. Double-click `out\Unglom.exe`. It lives in the notification area (the
+   system tray). Its menu has Pause/Resume, Start with Windows, the log
+   folder, and Exit. Exiting or pausing puts the taskbar back exactly as it
+   was.
+
+Logs are in `%LOCALAPPDATA%\Unglom`.
+
+## Development
+
+- `out\TitleDiffTests.exe` runs the title logic unit tests (`build.cmd` runs
+  them automatically).
+- `out\Unglom.exe --mode dump` changes nothing and logs the taskbar's XAML
+  tree to `%LOCALAPPDATA%\Unglom\tap.log`, which is how to find element names
+  when a Windows update changes the taskbar.
+- `out\UnglomTestWindows.exe 20 "Inbox - a - Outlook" "Inbox - b - Outlook"`
+  opens windows of one app for 20 seconds. A title written `Old=>New` is
+  renamed halfway through.
+- `tools\capture-taskbar.ps1 <file.png>` screenshots the taskbar.
+- `tools\send-menu-command.ps1 <n>` sends a tray menu command (1 = Pause or
+  Resume, 4 = Exit).
+
+Explorer keeps every copy of the DLL it has loaded, so each start or resume
+loads a freshly named copy from `%LOCALAPPDATA%\Unglom\bin`; older copies go
+idle and are cleaned up once Explorer restarts.
+
 ## Status
 
-Early development. Targets Windows 11 with "Combine taskbar buttons" set to
-"Never".
+Working on Windows 11 (tested on build 26340).

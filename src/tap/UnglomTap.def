@@ -1,0 +1,4 @@
+LIBRARY UnglomTap
+EXPORTS
+  DllGetClassObject PRIVATE
+  DllCanUnloadNow PRIVATE
