@@ -63,6 +63,13 @@ std::wstring AutomationId(xaml::FrameworkElement const& element) {
   return peer ? std::wstring(peer.GetAutomationId()) : std::wstring();
 }
 
+// The task list's ItemsRepeater keeps recycled buttons in the tree, parked
+// around (-10000, -10000), and they still report their previous window.
+bool IsParked(xaml::UIElement const& button) {
+  auto offset = button.ActualOffset();
+  return offset.x < -5000 || offset.y < -5000;
+}
+
 HWND WindowForButton(xaml::FrameworkElement const& button) {
   std::wstring id = AutomationId(button);
   if (id.rfind(kWindowIdPrefix, 0) != 0) return nullptr;
@@ -242,7 +249,7 @@ void LabelManager::Recompute() {
     ++it;
 
     auto button = FindButton(label);
-    if (!button) continue;
+    if (!button || IsParked(button)) continue;
     HWND hwnd = WindowForButton(button);
     if (!hwnd || !IsWindow(hwnd)) continue;
 
