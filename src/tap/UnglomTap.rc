@@ -5,16 +5,13 @@
 #include <winver.h>
 #include "../common/Version.h"
 
-1 ICON "unglom.ico"
-1 24 "Unglom.manifest"
-
 VS_VERSION_INFO VERSIONINFO
 FILEVERSION    UNGLOM_VERSION_MAJOR, UNGLOM_VERSION_MINOR, UNGLOM_VERSION_PATCH, 0
 PRODUCTVERSION UNGLOM_VERSION_MAJOR, UNGLOM_VERSION_MINOR, UNGLOM_VERSION_PATCH, 0
 FILEFLAGSMASK  VS_FFI_FILEFLAGSMASK
 FILEFLAGS      0
 FILEOS         VOS_NT_WINDOWS32
-FILETYPE       VFT_APP
+FILETYPE       VFT_DLL
 FILESUBTYPE    VFT2_UNKNOWN
 BEGIN
   BLOCK "StringFileInfo"
@@ -22,11 +19,11 @@ BEGIN
     BLOCK "040904B0"
     BEGIN
       VALUE "CompanyName",      "Unglom contributors"
-      VALUE "FileDescription",  "Unglom"
+      VALUE "FileDescription",  "Unglom taskbar module"
       VALUE "FileVersion",      UNGLOM_VERSION_STRING
-      VALUE "InternalName",     "Unglom"
+      VALUE "InternalName",     "UnglomTap"
       VALUE "LegalCopyright",   "Licensed under the Mozilla Public License 2.0"
-      VALUE "OriginalFilename", "Unglom.exe"
+      VALUE "OriginalFilename", "UnglomTap.dll"
       VALUE "ProductName",      "Unglom"
       VALUE "ProductVersion",   UNGLOM_VERSION_STRING
     END

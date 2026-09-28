@@ -1,15 +1,23 @@
 @echo off
+rem This Source Code Form is subject to the terms of the Mozilla Public
+rem License, v. 2.0. If a copy of the MPL was not distributed with this
+rem file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 rem Builds everything into out\ and runs the unit tests.
 rem Double-click it, or run "build.cmd nopause" from scripts.
 setlocal
 set "ROOT=%~dp0"
 set "TOOLCHAIN=%LOCALAPPDATA%\unglom-toolchain\msvc"
 
+rem Use a compiler that is already set up (a Visual Studio developer prompt, or
+rem CI); otherwise the portable toolchain, downloading it on first use.
+where cl >nul 2>&1 && goto :have_compiler
 if not exist "%TOOLCHAIN%\setup_x64.bat" (
   echo Compiler not found. Downloading it now, this takes a few minutes...
   call "%ROOT%tools\setup-toolchain.cmd" || goto :fail
 )
 call "%TOOLCHAIN%\setup_x64.bat"
+:have_compiler
 
 set "OUT=%ROOT%out"
 for %%d in (tests tap loader) do if not exist "%OUT%\obj\%%d" mkdir "%OUT%\obj\%%d"
@@ -26,10 +34,11 @@ cl %CFLAGS% /Fo"%OUT%\obj\tests\\" /Fd"%OUT%\obj\tests\\" /Fe"%OUT%\UnglomTestWi
 
 echo.
 echo === UnglomTap.dll ===
+rc /nologo /i "%ROOT%src\tap" /fo "%OUT%\obj\tap\UnglomTap.res" "%ROOT%src\tap\UnglomTap.rc" || goto :fail
 cl %CFLAGS% /LD /Fo"%OUT%\obj\tap\\" /Fd"%OUT%\obj\tap\\" /Fe"%OUT%\UnglomTap.dll" ^
   "%ROOT%src\tap\UnglomTap.cpp" "%ROOT%src\tap\LabelManager.cpp" "%ROOT%src\tap\AppIdentity.cpp" ^
   "%ROOT%src\common\TitleDiff.cpp" "%ROOT%src\common\Log.cpp" ^
-  "%ROOT%src\common\AppResolver.cpp" "%ROOT%src\common\PinSettings.cpp" ^
+  "%ROOT%src\common\AppResolver.cpp" "%ROOT%src\common\PinSettings.cpp" "%OUT%\obj\tap\UnglomTap.res" ^
   /link /DEBUG /DEF:"%ROOT%src\tap\UnglomTap.def" windowsapp.lib ole32.lib oleaut32.lib ^
   user32.lib shell32.lib propsys.lib advapi32.lib || goto :fail
 

@@ -34,24 +34,39 @@ Windows only offers left or center for all taskbars at once.
 - `TitleDiff` is the pure logic that works out which part of each title is
   distinctive.
 
+## Installing
+
+1. Download `UnglomSetup-<version>.exe` from the
+   [latest release](https://github.com/drubino-mozilla/unglom/releases/latest)
+   and run it. It installs for the current user only (no admin rights needed)
+   into `%LOCALAPPDATA%\Unglom\app`, makes Unglom start with Windows, adds it
+   to the Start menu, and starts it.
+
+   The installer isn't code-signed, so Windows SmartScreen may show
+   "Windows protected your PC" the first time. Click **More info**, then
+   **Run anyway**. Each release also has a `.sha256` file to check the
+   download against.
+2. In Windows Settings > Personalization > Taskbar > Taskbar behaviors, set
+   "Combine taskbar buttons and hide labels" to **Never**. The installer
+   offers to open that page if it isn't set already.
+
+To update, run the newer installer over the old one. To remove it, use
+Windows Settings > Apps > Installed apps, like any other program. Logs in
+`%LOCALAPPDATA%\Unglom` are kept.
+
+Unglom needs Windows 11 (64-bit).
+
 ## Using it
 
-1. In Windows Settings > Personalization > Taskbar > Taskbar behaviors, set
-   "Combine taskbar buttons and hide labels" to **Never**.
-2. Double-click `install.cmd`. It builds Unglom, copies it to
-   `%LOCALAPPDATA%\Unglom\app`, makes it start with Windows, adds it to the
-   Start menu, and starts it. The first build downloads Microsoft's C++
-   compiler and Windows SDK into `%LOCALAPPDATA%\unglom-toolchain` (no admin
-   needed, about 500 MB; this accepts the Visual Studio Build Tools license).
-3. Unglom lives in the notification area (the system tray). Its menu has
+1. Unglom lives in the notification area (the system tray). Its menu has
    Pause/Resume, Start with Windows, the log folder, and Exit. Exiting or
    pausing puts the taskbar back exactly as it was.
-4. To put a pin on other monitors, pin the app as usual, then choose
+2. To put a pin on other monitors, pin the app as usual, then choose
    **Pinned apps on each monitor...** in Unglom's menu. The window lists every
    pinned app with a checkbox per monitor; tick the monitors each app should
    appear on. Changes apply right away. **Put every pin back where Windows
    puts it** undoes all of that.
-5. The same window has an **Icon alignment** dropdown above each monitor's
+3. The same window has an **Icon alignment** dropdown above each monitor's
    column. The icons (and the Start button, which sits with them) move to
    that side of the taskbar; on the right they stop short of the clock.
 
@@ -59,8 +74,20 @@ While any pin is assigned, Windows Settings shows "Show my taskbar apps on" as
 "All taskbars". Picking a different option there still works: Unglom takes it
 as your new choice.
 
+## Building from source
+
+Double-click `install.cmd`. It builds Unglom and installs it exactly as the
+installer does (same folder, Start menu entry and startup setting, so the two
+can update or remove each other's work). The first build downloads Microsoft's
+C++ compiler and Windows SDK into `%LOCALAPPDATA%\unglom-toolchain` (no admin
+needed, about 500 MB; this accepts the Visual Studio Build Tools license).
 Run `install.cmd` again to update the installed copy; `uninstall.cmd` removes
-it. Logs are in `%LOCALAPPDATA%\Unglom`.
+it.
+
+`installer\build-installer.cmd` builds `out\UnglomSetup-<version>.exe`, the
+same installer the releases ship. On first use it downloads
+[Inno Setup](https://jrsoftware.org/isinfo.php) into the same toolchain
+folder (this accepts its license).
 
 ## Development
 
@@ -87,6 +114,21 @@ Explorer keeps every copy of the DLL it has loaded, so each start or resume
 loads a freshly named copy from `%LOCALAPPDATA%\Unglom\bin`; older copies go
 idle and are cleaned up once Explorer restarts.
 
+## Releasing
+
+The version number lives in `src\common\Version.h` and is stamped into
+`Unglom.exe`, `UnglomTap.dll` and the installer. To publish a release, bump
+it, commit, tag the commit `v<major>.<minor>.<patch>` and push the tag. The
+[Build workflow](.github/workflows/build.yml) checks the tag against
+`Version.h`, builds the installer and attaches it (with a `.sha256` file) to a
+new GitHub release.
+
 ## Status
 
 Working on Windows 11 (tested on build 26340).
+
+## License
+
+Unglom is released under the
+[Mozilla Public License 2.0](https://mozilla.org/MPL/2.0/); see
+[LICENSE](LICENSE).
