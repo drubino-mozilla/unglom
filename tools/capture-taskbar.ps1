@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 # Saves a PNG of the primary taskbar, or with -All of every monitor's taskbar
 # (left to right, stacked top to bottom). Usage: capture-taskbar.ps1 <output.png> [-All]
 param([Parameter(Mandatory)] [string] $OutFile, [switch] $All)

@@ -1,3 +1,7 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 # Sends a tray-menu command to the running Unglom.exe, for testing.
 # Commands: 1 = Pause/Resume, 2 = Start with Windows, 3 = Open log folder, 4 = Exit,
 #           5 = Pinned apps on each monitor

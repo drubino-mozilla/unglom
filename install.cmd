@@ -1,4 +1,8 @@
 @echo off
+rem This Source Code Form is subject to the terms of the Mozilla Public
+rem License, v. 2.0. If a copy of the MPL was not distributed with this
+rem file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
 rem Builds Unglom, installs it into %LOCALAPPDATA%\Unglom\app, makes it start
 rem with Windows, adds a Start menu shortcut, and starts it. Later rebuilds
 rem don't touch the installed copy; run this again to update it.

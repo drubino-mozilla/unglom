@@ -1,3 +1,7 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+
 // Unglom.exe: tray app that loads UnglomTap.dll into the taskbar and keeps it
 // loaded across Explorer restarts. The DLL undoes its changes when this
 // process exits or the user pauses it.
