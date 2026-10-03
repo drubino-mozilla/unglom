@@ -125,7 +125,7 @@ new GitHub release.
 
 ## Status
 
-Working on Windows 11 (tested on build 26340).
+Working on Windows 11 (tested on build 26340.9596).
 
 ## License
 

@@ -37,7 +37,11 @@ constexpr std::wstring_view kLabelName = L"LabelControl";
 constexpr std::wstring_view kXamlSourceType = L"Windows.UI.Xaml.Hosting.DesktopWindowXamlSource";
 constexpr std::wstring_view kTaskbarRowName = L"TaskbarFrameRepeater";
 constexpr std::wstring_view kTrayType = L"SystemTray.SystemTrayFrame";
+constexpr std::wstring_view kStartName = L"LaunchListButton";
+constexpr std::wstring_view kOverflowType = L"Taskbar.OverflowToggleButton";
 constexpr double kClockGap = 8;
+// How much wider aligned icons can get before the layout shrinks them.
+constexpr double kNewButtonRoom = 48;
 constexpr std::wstring_view kWindowIdPrefix = L"Window: ";
 constexpr std::wstring_view kPinIdPrefix = L"Appid: ";
 constexpr ULONGLONG kAppIdRefreshMs = 2'000;
@@ -136,10 +140,12 @@ std::wstring Describe(xaml::DependencyObject const& o) {
   if (auto fe = o.try_as<xaml::FrameworkElement>()) {
     if (!fe.Name().empty()) s += L"#" + std::wstring(fe.Name());
     auto m = fe.Margin();
+    auto at = fe.ActualOffset();
     wchar_t buf[256];
-    swprintf_s(buf, L" [%.1fx%.1f w=%g minw=%g maxw=%g vis=%d margin=%g,%g,%g,%g]",
-               fe.ActualWidth(), fe.ActualHeight(), fe.Width(), fe.MinWidth(), fe.MaxWidth(),
-               static_cast<int>(fe.Visibility()), m.Left, m.Top, m.Right, m.Bottom);
+    swprintf_s(buf, L" [%.1fx%.1f at %.1f,%.1f w=%g minw=%g maxw=%g vis=%d halign=%d margin=%g,%g,%g,%g]",
+               fe.ActualWidth(), fe.ActualHeight(), at.x, at.y, fe.Width(), fe.MinWidth(),
+               fe.MaxWidth(), static_cast<int>(fe.Visibility()),
+               static_cast<int>(fe.HorizontalAlignment()), m.Left, m.Top, m.Right, m.Bottom);
     s += buf;
   }
   if (auto tb = o.try_as<TextBlock>()) {
@@ -149,10 +155,12 @@ std::wstring Describe(xaml::DependencyObject const& o) {
   return s;
 }
 
-void DumpTree(xaml::DependencyObject const& o, int depth) {
+void DumpTree(xaml::DependencyObject const& o, int depth, bool intoButtons = true) {
   Log(L"%*ls%ls", depth * 2, L"", Describe(o).c_str());
+  winrt::hstring type;
+  if (!intoButtons && ClassName(o, type) == kButtonType) return;
   int n = VisualTreeHelper::GetChildrenCount(o);
-  for (int i = 0; i < n; ++i) DumpTree(VisualTreeHelper::GetChild(o, i), depth + 1);
+  for (int i = 0; i < n; ++i) DumpTree(VisualTreeHelper::GetChild(o, i), depth + 1, intoButtons);
 }
 
 template <typename F>
@@ -460,10 +468,10 @@ void LabelManager::PlaceButtons() {
 }
 
 // Each taskbar's buttons, Start included, sit in one full-width row that the
-// taskbar lays out itself. Aligning that row within its taskbar moves them all;
-// on the right it has to stay clear of the clock, which is drawn over the row.
+// taskbar lays out itself, and Explorer anchors jumplists and previews where
+// that layout put each button, relative to the row.
 void LabelManager::AlignIcons() {
-  if (settings_.iconAlignment.empty() && alignedRows_.empty()) return;
+  if (settings_.iconAlignment.empty() && aligned_.empty()) return;
   std::vector<Monitor> monitors = ConnectedMonitors();
   for (const auto& weakSource : sources_) {
     auto source = weakSource.get();
@@ -479,31 +487,179 @@ void LabelManager::AlignIcons() {
     auto setting = here == monitors.end() ? settings_.iconAlignment.end()
                                           : settings_.iconAlignment.find(here->id);
     if (setting == settings_.iconAlignment.end()) {
-      if (alignedRows_.erase(root)) {
-        row.ClearValue(xaml::FrameworkElement::HorizontalAlignmentProperty());
-        row.ClearValue(xaml::FrameworkElement::MarginProperty());
+      if (auto it = aligned_.find(root); it != aligned_.end()) {
+        Unalign(it->second);
+        aligned_.erase(it);
       }
       continue;
     }
 
-    auto alignment = setting->second == IconAlignment::Left    ? xaml::HorizontalAlignment::Left
-                     : setting->second == IconAlignment::Right ? xaml::HorizontalAlignment::Right
-                                                               : xaml::HorizontalAlignment::Center;
-    double right = 0;
-    if (alignment == xaml::HorizontalAlignment::Right) {
-      if (auto tray = FindElement(root, FindRoot(content), kTrayType, trays_)) {
-        right = tray.ActualWidth() + kClockGap;
-      }
-    }
-    if (row.HorizontalAlignment() != alignment) row.HorizontalAlignment(alignment);
-    if (row.Margin().Right != right) row.Margin({0, 0, right, 0});
-    if (!alignedRows_.count(root)) {
+    AlignedTaskbar& aligned = aligned_[root];
+    if (aligned.alignment != setting->second) {
       Log(L"Taskbar %p icons aligned %ls", root,
           setting->second == IconAlignment::Left ? L"left"
           : setting->second == IconAlignment::Right ? L"right" : L"center");
+      aligned.alignment = setting->second;
     }
-    alignedRows_[root] = winrt::make_weak(row);
+
+    // The clock is the last item in the row, unless this Windows build draws it over the row.
+    auto tray = FindElement(root, FindRoot(content), kTrayType, trays_);
+    xaml::FrameworkElement clock = nullptr;
+    for (xaml::DependencyObject o = tray; o; o = VisualTreeHelper::GetParent(o)) {
+      if (VisualTreeHelper::GetParent(o) == row) {
+        clock = o.try_as<xaml::FrameworkElement>();
+        break;
+      }
+    }
+    if (clock) {
+      AlignInRow(aligned, setting->second, row, clock);
+      continue;
+    }
+    // Aligning the whole row within its taskbar moves the icons; on the right it
+    // has to stay clear of the clock, which is drawn over the row.
+    auto alignment = setting->second == IconAlignment::Left    ? xaml::HorizontalAlignment::Left
+                     : setting->second == IconAlignment::Right ? xaml::HorizontalAlignment::Right
+                                                               : xaml::HorizontalAlignment::Center;
+    double right = alignment == xaml::HorizontalAlignment::Right && tray ? tray.ActualWidth() + kClockGap : 0;
+    if (row.HorizontalAlignment() != alignment) row.HorizontalAlignment(alignment);
+    if (row.Margin().Right != right) row.Margin({0, 0, right, 0});
+    aligned.row = winrt::make_weak(row);
   }
+}
+
+namespace {
+
+struct RowIcons {
+  xaml::FrameworkElement start{nullptr};
+  double width = 0;  // From Start to the end of the last icon.
+  bool squeezed = false;
+};
+
+// Measures Start and the icons after it, as last laid out. They are squeezed
+// when the layout moved some into the overflow menu or shrank Start below
+// `startWidth`, the widest it has been.
+RowIcons MeasureIcons(xaml::FrameworkElement const& row, xaml::FrameworkElement const& clock,
+                      double startWidth) {
+  RowIcons icons;
+  std::vector<xaml::FrameworkElement> items;
+  winrt::hstring type;
+  int n = VisualTreeHelper::GetChildrenCount(row);
+  for (int i = 0; i < n; ++i) {
+    auto item = VisualTreeHelper::GetChild(row, i).try_as<xaml::FrameworkElement>();
+    if (!item || item == clock || IsParked(item) || item.Visibility() == xaml::Visibility::Collapsed) {
+      continue;
+    }
+    if (std::wstring_view(item.Name()) == kStartName) icons.start = item;
+    if (ClassName(item, type) == kOverflowType) icons.squeezed = true;
+    items.push_back(item);
+  }
+  if (!icons.start) return icons;
+  if (icons.start.ActualWidth() < startWidth - 0.5) icons.squeezed = true;
+  double startAt = icons.start.ActualOffset().x;
+  double end = startAt;
+  for (const auto& item : items) {
+    double at = item.ActualOffset().x;
+    if (at >= startAt) end = std::max(end, at + static_cast<double>(item.ActualWidth()));
+  }
+  icons.width = end - startAt;
+  return icons;
+}
+
+}  // namespace
+
+// Explorer anchors jumplists and previews where the row's layout put each
+// button, so icons only move through margins that layout honors. A centered
+// taskbar centers Start and the icons, margins included, unless they would
+// cross into the clock's space, which starts at the clock's left margin; then
+// it keeps them just clear of it, and it shrinks them to compact buttons once
+// they don't fit.
+// - Right: a left margin on Start that still leaves room for a new button
+//   pushes the icons against the clock's space.
+// - Left: widening the clock's margin until its space starts right after the
+//   icons pushes them to the left edge, but for the room left for a new
+//   button, which a negative margin on Start takes back.
+void LabelManager::AlignInRow(AlignedTaskbar& aligned, IconAlignment alignment,
+                              xaml::FrameworkElement const& row, xaml::FrameworkElement const& clock) {
+  IconAlignment windows = WindowsIconAlignment();
+  if (alignment == windows) {
+    SetLeftMargin(aligned.start, nullptr, 0);
+    SetLeftMargin(aligned.clock, nullptr, 0);
+    return;
+  }
+  RowIcons laidOut = MeasureIcons(row, clock, aligned.startWidth);
+  // A button too wide for the room left (such as one about to be hidden) makes
+  // the layout squeeze the icons, which then fit the margins they were given.
+  // Measure them as they'd be without the margins instead.
+  if (laidOut.squeezed && (aligned.start.element.get() || aligned.clock.element.get())) {
+    SetLeftMargin(aligned.start, nullptr, 0);
+    SetLeftMargin(aligned.clock, nullptr, 0);
+    row.UpdateLayout();
+    laidOut = MeasureIcons(row, clock, aligned.startWidth);
+  }
+  auto start = laidOut.start;
+  double startMargin = 0;
+  double clockMargin = 0;
+  if (start) {
+    aligned.startWidth = std::max(aligned.startWidth, static_cast<double>(start.ActualWidth()));
+    double startAt = start.ActualOffset().x;
+    double icons = laidOut.width;
+    double rowWidth = row.ActualWidth();
+    double clockAt = clock.ActualOffset().x;
+    double windowsGap = aligned.clock.element.get() ? aligned.clock.originalLeft : clock.Margin().Left;
+    double clockSpace = clockAt - windowsGap;
+    double unshiftedAt = startAt - start.Margin().Left;
+
+    if (alignment == IconAlignment::Center) {
+      startMargin = std::max(0.0, (rowWidth - icons) / 2 - unshiftedAt);
+    } else if (windows == IconAlignment::Left) {
+      startMargin = std::max(0.0, clockSpace - icons - unshiftedAt);
+    } else if (alignment == IconAlignment::Right) {
+      double room = std::min(kNewButtonRoom, (rowWidth - clockSpace) / 2);
+      startMargin = std::max(0.0, clockSpace - room - icons);
+    } else if (clockAt - icons > windowsGap) {
+      startMargin = -std::min(kNewButtonRoom, static_cast<double>(start.ActualWidth()) - 1);
+      clockMargin = clockAt - icons;
+    }
+  }
+  bool moved = startMargin >= 0.5 || startMargin < 0;
+  SetLeftMargin(aligned.start, moved ? start : nullptr, startMargin);
+  SetLeftMargin(aligned.clock, clockMargin > 0 ? clock : nullptr, clockMargin);
+}
+
+void LabelManager::SetLeftMargin(SavedMargin& saved, xaml::FrameworkElement const& element,
+                                 double left) {
+  auto previous = saved.element.get();
+  if (previous != element) {
+    if (previous) {
+      if (saved.original == xaml::DependencyProperty::UnsetValue()) {
+        previous.ClearValue(xaml::FrameworkElement::MarginProperty());
+      } else {
+        previous.SetValue(xaml::FrameworkElement::MarginProperty(), saved.original);
+      }
+    }
+    saved = {};
+  }
+  if (!element) return;
+  if (!saved.element.get()) {
+    saved.element = winrt::make_weak(element);
+    saved.original = element.ReadLocalValue(xaml::FrameworkElement::MarginProperty());
+    saved.originalLeft = element.Margin().Left;
+  }
+  auto margin = element.Margin();
+  if (std::abs(margin.Left - left) >= 0.5) {
+    margin.Left = left;
+    element.Margin(margin);
+  }
+}
+
+void LabelManager::Unalign(AlignedTaskbar& aligned) {
+  if (auto row = aligned.row.get()) {
+    row.ClearValue(xaml::FrameworkElement::HorizontalAlignmentProperty());
+    row.ClearValue(xaml::FrameworkElement::MarginProperty());
+  }
+  SetLeftMargin(aligned.start, nullptr, 0);
+  SetLeftMargin(aligned.clock, nullptr, 0);
+  aligned = {};
 }
 
 // The first element in the tree whose name or type is `key`, skipping task
@@ -529,13 +685,8 @@ xaml::FrameworkElement LabelManager::FindElement(void* root, xaml::DependencyObj
 }
 
 void LabelManager::UnalignAll() {
-  for (auto& [root, weak] : alignedRows_) {
-    if (auto row = weak.get()) {
-      row.ClearValue(xaml::FrameworkElement::HorizontalAlignmentProperty());
-      row.ClearValue(xaml::FrameworkElement::MarginProperty());
-    }
-  }
-  alignedRows_.clear();
+  for (auto& [root, aligned] : aligned_) Unalign(aligned);
+  aligned_.clear();
 }
 
 HMONITOR LabelManager::RootMonitor(void* root) {
@@ -684,6 +835,15 @@ void LabelManager::Dump() {
       first = false;
     }
     DumpTree(button, 1);
+  }
+  for (const auto& weak : sources_) {
+    auto source = weak.get();
+    auto content = source ? source.Content() : nullptr;
+    if (!content) continue;
+    void* root = RootKey(content);
+    RootMonitor(root);
+    Log(L"--- Taskbar %p", root);
+    DumpTree(FindRoot(content), 1, false);
   }
   Log(L"=== End dump ===");
 }

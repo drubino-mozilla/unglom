@@ -64,7 +64,28 @@ class LabelManager {
   void ShowAll();
   using ElementCache =
       std::unordered_map<void*, winrt::weak_ref<winrt::Windows::UI::Xaml::FrameworkElement>>;
+  // A margin Unglom overrides, and the value to put back.
+  struct SavedMargin {
+    winrt::weak_ref<winrt::Windows::UI::Xaml::FrameworkElement> element;
+    winrt::Windows::Foundation::IInspectable original{nullptr};
+    double originalLeft = 0;
+  };
+  // What Unglom changed on one taskbar to align its icons.
+  struct AlignedTaskbar {
+    IconAlignment alignment{};
+    winrt::weak_ref<winrt::Windows::UI::Xaml::FrameworkElement> row;  // Alignment and margin
+    SavedMargin start;
+    SavedMargin clock;
+    double startWidth = 0;  // The widest Start has been, so not squeezed.
+  };
   void AlignIcons();
+  void AlignInRow(AlignedTaskbar& aligned, IconAlignment alignment,
+                  winrt::Windows::UI::Xaml::FrameworkElement const& row,
+                  winrt::Windows::UI::Xaml::FrameworkElement const& clock);
+  // Sets the left margin of `element`, or with no element puts back the one set before.
+  static void SetLeftMargin(SavedMargin& saved, winrt::Windows::UI::Xaml::FrameworkElement const& element,
+                            double left);
+  static void Unalign(AlignedTaskbar& aligned);
   winrt::Windows::UI::Xaml::FrameworkElement FindElement(void* root,
                                                          winrt::Windows::UI::Xaml::DependencyObject const& top,
                                                          std::wstring_view key, ElementCache& cache);
@@ -95,10 +116,10 @@ class LabelManager {
   std::unordered_map<HWND, CachedAppId> appIds_;
   std::vector<winrt::weak_ref<winrt::Windows::UI::Xaml::Hosting::DesktopWindowXamlSource>> sources_;
   std::unordered_map<void*, HWND> rootWindows_;
-  // Per taskbar root: its button row, the rows Unglom has aligned, and the clock area.
+  // Per taskbar root: its button row, the clock area, and what aligning its icons changed.
   ElementCache rows_;
-  ElementCache alignedRows_;
   ElementCache trays_;
+  std::unordered_map<void*, AlignedTaskbar> aligned_;
   // Keyed by the button's identity, which outlives its InstanceHandle.
   std::unordered_map<void*, winrt::weak_ref<winrt::Windows::UI::Xaml::FrameworkElement>> hidden_;
   // Buttons standing in for a pin whose app only runs on other monitors, and
